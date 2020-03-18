@@ -1,7 +1,8 @@
 # aws-mq-cleaner
 
 [![License](https://img.shields.io/github/license/habx/aws-mq-cleaner)](/LICENSE)
-[![Release](https://img.shields.io/github/release/habx/aws-mq-cleaner.svg)](https://github.com/habx/aws-mq-cleaner/releases/latest)
+[![Release](https://img.shields.io/github/v/release/habx/aws-mq-cleaner)](https://github.com/habx/aws-mq-cleaner/releases/latest)
+[![Go version]https://img.shields.io/github/go-mod/go-version/habx/aws-mq-cleaner/dev)](https://golang.org/doc/devel/release.html)
 [![Docker](https://img.shields.io/docker/pulls/habx/aws-mq-cleaner)](https://hub.docker.com/r/habx/aws-mq-cleaner)
 [![CircleCI](https://img.shields.io/circleci/build/github/habx/aws-mq-cleaner/dev)](https://app.circleci.com/pipelines/github/habx/aws-mq-cleaner)
 
