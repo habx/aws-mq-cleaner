@@ -9,6 +9,7 @@
 
 `aws-mq-cleaner` is a tool to remove sqs queues and sns topics that are no more used.
 
+
 ## Install
 
 ### Docker
