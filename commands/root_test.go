@@ -9,7 +9,7 @@ import (
 func Test_RootCommand(t *testing.T) {
 	Convey("RootCommand: without args", t, func() {
 		err := RootCommand.Execute()
-		So(err, ShouldNotBeNil)
+		So(err, ShouldBeNil)
 	})
 }
 func Test_Version(t *testing.T) {
