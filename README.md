@@ -15,7 +15,7 @@
 * SQS
 
 I'm getting the metrics from cloudwatch.
-If `NumberOfMessagesReceived` and `NumberOfEmptyReceipts` are at zero I consider the queue to be more used.
+If `NumberOfMessagesReceived` and `NumberOfEmptyReceipts` are at zero I consider the queue to not be used anymore.
 
 * SNS
 
