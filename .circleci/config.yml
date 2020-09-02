@@ -97,9 +97,10 @@ jobs:
       - checkout
       - *golang_with_cache_restore_deps
       - *golang_get_mod
-      - *golang_with_cache_save_deps
       - run: go get -u github.com/mitchellh/gox
       - run: go get -u github.com/tcnksm/ghr
+      - *golang_get_mod
+      - *golang_with_cache_save_deps
       - run:
           name: cross compile
           command: |
