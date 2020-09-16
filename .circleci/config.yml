@@ -83,9 +83,9 @@ jobs:
           command: |
             go test -v $(go list ./... | grep -v "vendor") -cover -p=1
           environment:
-            TEST_SQS_ENDPOINT: http://localstack:4576
-            TEST_SNS_ENDPOINT: http://localstack:4575
-            TEST_CLOUDWATCH_ENDPOINT: http://localstack:4582
+            TEST_SQS_ENDPOINT: http://localstack:4566
+            TEST_SNS_ENDPOINT: http://localstack:4566
+            TEST_CLOUDWATCH_ENDPOINT: http://localstack:4566
             AWS_REGION: eu-west-1
             AWS_SECRET_ACCESS_KEY: foobar
             AWS_ACCESS_KEY_ID: foorbar
