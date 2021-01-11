@@ -81,7 +81,11 @@ jobs:
       - run:
           name: Exec tests
           command: |
-            go test -v $(go list ./... | grep -v "vendor") -cover -p=1
+            sleep 5
+            go test -v $(go list ./... | grep -v "vendor") -covermode=atomic -coverprofile=coverage.txt
+            go tool cover -html=coverage.txt -o coverage.html
+            mv coverage.html /tmp/artifacts
+            bash <(curl -s https://codecov.io/bash)
           environment:
             TEST_SQS_ENDPOINT: http://localstack:4566
             TEST_SNS_ENDPOINT: http://localstack:4566
