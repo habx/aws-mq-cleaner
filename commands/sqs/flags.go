@@ -12,4 +12,7 @@ var (
 
 	// UnusedSince get list since xx
 	UnusedSince string
+
+	// CheckTagNameUpdateDate is name for skip delete queue
+	CheckTagNameUpdateDate string
 )

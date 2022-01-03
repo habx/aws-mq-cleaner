@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/service/sns"
 	"github.com/habx/aws-mq-cleaner/flags"
 	"github.com/habx/aws-mq-cleaner/helpers"
 	"github.com/habx/aws-mq-cleaner/logger"
+	t "github.com/habx/aws-mq-cleaner/time"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -41,25 +43,36 @@ var (
 )
 
 type rootArguments struct {
-	enableDelete  bool
-	noHeader      bool
-	excludePatten *regexp.Regexp
+	UnusedSince     string
+	UnusedSinceDate *time.Time
+	enableDelete    bool
+	noHeader        bool
+	excludePatten   *regexp.Regexp
 }
 
 func defaultArguments() rootArguments {
+	unusedSinceDate, err := t.ParseSince(UnusedSince)
+	if err != nil {
+		l.Error("missing params --since")
+		l.Fatalf(err.Error())
+	}
 	excludePatten, err := helpers.InitExcludePattern(flags.ExcludePatten)
 	if err != nil {
 		l.Fatalf(err.Error())
 	}
 	return rootArguments{
-		enableDelete:  flags.Delete,
-		noHeader:      flags.NoHeader,
-		excludePatten: excludePatten,
+		UnusedSince:     UnusedSince,
+		UnusedSinceDate: unusedSinceDate,
+		enableDelete:    flags.Delete,
+		noHeader:        flags.NoHeader,
+		excludePatten:   excludePatten,
 	}
 }
 
 func init() {
 	Command.Flags().StringVarP(&AwsSnsEndpoint, "sns-endpoint", "", "", "SNS endpoint")
+	Command.Flags().StringVarP(&CheckTagNameUpdateDate, "check-tag-name-update-date", "", "", "Define tag name for check update date")
+	Command.Flags().StringVarP(&UnusedSince, "since", "", "7d", "Used for 'update date' AWS tag")
 	Command.Flags().StringVarP(&AwsSnsTopicPrefix, "topic-prefix", "", "", "SQS queue prefix")
 	Command.Flags().IntVarP(&AwsSnsMaxTopic, "max-topics", "", 100, "Get max topics (Example: 10) before filtering")
 }
@@ -67,13 +80,15 @@ func init() {
 func validation(cmd *cobra.Command, cmdLineArgs []string) {
 	l = logger.GetLogger(flags.LogLevel).Sugar()
 	rootArgs = defaultArguments()
-	l.Debug("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
-	l.Debug("--max-topics", "AwsSnsMaxTopic", AwsSnsMaxTopic)
-	l.Debug("--topic-prefix", "AwsSnsTopicPrefix", AwsSnsTopicPrefix)
-	l.Debug("--delete", "delete", rootArgs.enableDelete)
-	l.Debug("--no-header", "no-header", rootArgs.noHeader)
+	l.Debugw("--check-tag-name-update-date", "CheckTagNameUpdateDate", CheckTagNameUpdateDate)
+	l.Debugw("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
+	l.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
+	l.Debugw("--max-topics", "AwsSnsMaxTopic", AwsSnsMaxTopic)
+	l.Debugw("--topic-prefix", "AwsSnsTopicPrefix", AwsSnsTopicPrefix)
+	l.Debugw("--delete", "delete", rootArgs.enableDelete)
+	l.Debugw("--no-header", "no-header", rootArgs.noHeader)
 	if rootArgs.excludePatten != nil {
-		l.Debug("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
+		l.Debugw("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
 	}
 }
 
@@ -169,6 +184,18 @@ func awsSNSToClean() map[string][]string {
 				if err != nil {
 					l.Fatal(err)
 				}
+				if CheckTagNameUpdateDate != "" {
+					l.Debug("AWS: update date tag enabled")
+					skip, err := updateDateToDelete(topicARN)
+					if err != nil {
+						l.Warnf("cannot check tag name date update: %v", err)
+					}
+					if skip {
+						l.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *snsTopicARNToTopicName(topicARN))
+						wg.Done()
+						return
+					}
+				}
 				topicSubscriptionsSum := 0
 				if topicAttributes != nil {
 					for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
@@ -204,6 +231,33 @@ func awsSNSToClean() map[string][]string {
 func snsTopicARNToTopicName(topicARN *string) *string {
 	split := strings.Split(*topicARN, ":")
 	return &split[len(split)-1]
+}
+
+// return true if topic should be skipped
+func updateDateToDelete(topicArn *string) (bool, error) {
+	snsTags, err := snsSvc.ListTagsForResource(&sns.ListTagsForResourceInput{ResourceArn: topicArn})
+	if err != nil {
+		return false, err
+	}
+	for _, tag := range snsTags.Tags {
+		if tag.Key != nil && *tag.Key == CheckTagNameUpdateDate {
+			if tag.Value == nil {
+				return false, nil
+			}
+			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *tag.Value)
+			if err != nil {
+				return false, err
+			}
+			if dataTime.After(*rootArgs.UnusedSinceDate) {
+				l.Infof("%s is not old (%s) enough to delete", *topicArn, dataTime.String())
+				return true, nil
+			} else {
+				l.Infof("%s is old (%s) enough to delete", *topicArn, dataTime.String())
+				return false, nil
+			}
+		}
+	}
+	return false, err
 }
 
 func awsSNSDelete(topics map[string][]string) map[string][]string {

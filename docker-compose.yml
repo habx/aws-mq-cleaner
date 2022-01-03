@@ -3,10 +3,7 @@ services:
   localstack:
     image: localstack/localstack
     ports:
-      - 4575:4575 # SNS
-      - 4576:4576 # SQS
-      - 4582:4582 # CloudWatch
-      - 4586:4586 # CloudWatch Logs
+      - 4566:4566
     environment:
       SERVICES: sqs,sns,cloudwatch
       DEFAULT_REGION: eu-west-1
