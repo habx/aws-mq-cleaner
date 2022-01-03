@@ -1,20 +1,49 @@
 version: 2.1
+
 # --- Anchor alias ---- #
 alias:
-
 # - Docker configuration - #
   - &docker_golang_configuration
     docker:
-      - image: circleci/golang
+      - image: cimg/go:1.16.5
+        user: root
+  - &docker_buildpack_deps_configuration
+    docker:
+      - image: circleci/buildpack-deps:stretch
         user: root
   - &docker_buildpack_deps_python_configuration
     docker:
-      - image: circleci/python
+      - image: cimg/python:3.8.1
         user: root
+  - &docker_golang_with_localstack_configuration
+    docker:
+      - image: cimg/go:1.16.5
+        user: root
+      - image: localstack/localstack
+        name: localstack
+        environment:
+          SERVICES: sqs,sns,cloudwatch
+          DEFAULT_REGION: eu-west-1
 # - Jobs filters - #
   - &filters_ignore_tags
     tags:
       ignore: /.*/
+  - &filters_allow_tags_all_branche
+    tags:
+      only: /^v.*/
+    branches:
+      only: /.*/
+  - &filters_allow_tags
+    tags:
+      only: /^v.*/
+  - &filters_allow_branch_dev
+    branches:
+      only:
+        - dev
+  - &filters_ignore_branch_dev
+    branches:
+      ignore:
+        - /dev.*/
   - &filters_ignore_branch_allow_tags
     tags:
       only: /^v.*/
@@ -24,35 +53,27 @@ alias:
     restore_cache:
       keys:
         - >-
-          golang-mod-{{ .Branch }}-{{ checksum "go.mod" }}
+          golang-deps-prod-{{ .Branch }}-{{ checksum "go.mod" }}
         - >-
-          golang-mod-{{ .Branch }}
+          golang-deps-prod-{{ .Branch }}
         - >-
-          golang-mod
+          golang-deps-prod
   - &golang_with_cache_save_deps
     save_cache:
       key: >-
-        golang-mod-{{ .Branch }}-{{ checksum "go.mod" }}
+        golang-deps-prod-{{ .Branch }}-{{ checksum "go.mod" }}
       paths:
         - "/go/pkg/mod"
   - &golang_get_mod
     run:
       name: mod download
       command: |
+        rm /root/.gitconfig
+        git config --global url."https://habxtech:${FETCH_GOLANG_LIBS}@github.com".insteadOf "https://github.com"
         GO111MODULE=on go mod download
         GO111MODULE=on go mod vendor
 
-  - &docker_golang_with_localstack_configuration
-    docker:
-      - image: circleci/golang
-        user: root
-      - image: localstack/localstack
-        name: localstack
-        environment:
-          SERVICES: sqs,sns,cloudwatch
-          DEFAULT_REGION: eu-west-1
-
-# --- Jobs ---- #
+# --- Anchor alias ---- #
 jobs:
   static-test:
     <<: *docker_golang_configuration
@@ -93,7 +114,6 @@ jobs:
             AWS_REGION: eu-west-1
             AWS_SECRET_ACCESS_KEY: foobar
             AWS_ACCESS_KEY_ID: foorbar
-
   build:
     <<: *docker_golang_configuration
     working_directory: /go/src/github.com/habx/aws-mq-cleaner
@@ -122,7 +142,6 @@ jobs:
     working_directory: /go/src/github.com/habx/aws-mq-cleaner
     steps:
       - checkout
-      - setup_remote_docker
       - attach_workspace:
           at: /go/src/github.com/habx/aws-mq-cleaner
       - docker/check
@@ -136,7 +155,7 @@ jobs:
 
   publish-github-release:
       docker:
-        - image: circleci/golang:1.13
+        - image: cimg/go:1.16.5
       working_directory: /go/src/github.com/habx/aws-mq-cleaner
       steps:
         - checkout
@@ -148,7 +167,6 @@ jobs:
               go get -u github.com/tcnksm/ghr
               git describe --tags
               ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -replace `git describe --tags` ./dist/
-
 
 orbs:
   docker: circleci/docker@1.0.0
