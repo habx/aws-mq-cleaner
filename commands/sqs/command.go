@@ -30,11 +30,11 @@ var (
 		Use:     "sqs",
 		Aliases: []string{"sqs"},
 		Short:   "AWS SQS",
-		Long:    `This command will identify the queues to be cleaned.`,
+		Long:    `This command wi	ll identify the queues to be cleaned.`,
 		PreRun:  validation,
 		Run:     printResult,
 	}
-	l        *zap.Logger
+	l        *zap.SugaredLogger
 	rootArgs rootArguments
 	sqsSvc   *sqs.SQS
 	mux      sync.RWMutex
@@ -82,15 +82,15 @@ func printResult(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSQSToClean() map[string][]string {
-	l.Sugar().Debug("AWS: init sqs session")
+	l.Debug("AWS: init sqs session")
 	sqsSvc = sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
 
-	l.Sugar().Debug("AWS: init cloudwatch session")
+	l.Debug("AWS: init cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
 	now := time.Now()
 	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
-		l.Sugar().Fatal(err)
+		l.Fatal(err)
 	}
 	m := make(map[string][]string)
 
@@ -102,39 +102,39 @@ func awsSQSToClean() map[string][]string {
 			if qURL != nil {
 				if rootArgs.excludePatten != nil {
 					if rootArgs.excludePatten.MatchString(*sqsQueueURLToQueueName(qURL)) {
-						l.Sugar().Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
+						l.Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
 						wg.Done()
 						return
 					}
 				}
 				metrics, err := cwSvc.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, &now, qURL))
 				if err != nil {
-					l.Sugar().Fatal(err)
+					l.Fatal(err)
 				}
 				metricsSum := 0.0
 				failed := false
 				for _, result := range metrics.MetricDataResults {
 					if len(result.Values) != 0 {
 						for _, value := range result.Values {
-							l.Sugar().Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") Value : ", *value)
+							l.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") Value : ", *value)
 							metricsSum += *value
 						}
 					} else {
-						l.Sugar().Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") No value : ", *result.Label)
+						l.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") No value : ", *result.Label)
 						failed = true
 					}
 				}
 				if !failed {
 					if metricsSum == metricSumZero {
-						l.Sugar().Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is unused (metricsSum=", metricsSum, ")")
+						l.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is unused (metricsSum=", metricsSum, ")")
 						mux.Lock()
 						m[*qURL] = []string{*sqsQueueURLToQueueName(qURL)}
 						mux.Unlock()
 					} else {
-						l.Sugar().Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is used (metricsSum=", metricsSum, ")")
+						l.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is used (metricsSum=", metricsSum, ")")
 					}
 				} else {
-					l.Sugar().Debug("SQS: " + *sqsQueueURLToQueueName(qURL) + " failed, invalid metric")
+					l.Debug("SQS: " + *sqsQueueURLToQueueName(qURL) + " failed, invalid metric")
 				}
 			}
 			wg.Done()
@@ -155,12 +155,12 @@ type rootArguments struct {
 func defaultAwsSQSArguments() rootArguments {
 	unusedSinceDate, err := t.ParseSince(UnusedSince)
 	if err != nil {
-		l.Sugar().Error("missing params --since")
-		l.Sugar().Fatalf(err.Error())
+		l.Error("missing params --since")
+		l.Fatalf(err.Error())
 	}
 	excludePatten, err := helpers.InitExcludePattern(flags.ExcludePatten)
 	if err != nil {
-		l.Sugar().Fatalf(err.Error())
+		l.Fatalf(err.Error())
 	}
 	return rootArguments{
 		UnusedSince:     UnusedSince,
@@ -172,26 +172,26 @@ func defaultAwsSQSArguments() rootArguments {
 }
 
 func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	l = logger.GetLogger(flags.LogLevel)
+	l = logger.GetLogger(flags.LogLevel).Sugar()
 	rootArgs = defaultAwsSQSArguments()
-	l.Debug("--since", zap.Time("sinceParsed", *rootArgs.UnusedSinceDate), zap.String("since", rootArgs.UnusedSince))
-	l.Debug("--queue-prefix", zap.String("AwsSQSQueuePrefix", AwsSQSQueuePrefix))
-	l.Debug("--sqs-endpoint", zap.String("AwsSqsEndpoint", AwsSqsEndpoint))
-	l.Debug("--cloudwatch-endpoint", zap.String("AwsCloudWatchEndpoint", AwsCloudWatchEndpoint))
-	l.Debug("--delete", zap.Bool("delete", rootArgs.enableDelete))
-	l.Debug("--no-header", zap.Bool("no-header", rootArgs.noHeader))
+	l.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
+	l.Debugw("--queue-prefix", "AwsSQSQueuePrefix", AwsSQSQueuePrefix)
+	l.Debugw("--sqs-endpoint", "AwsSqsEndpoint", AwsSqsEndpoint)
+	l.Debugw("--cloudwatch-endpoint", "AwsCloudWatchEndpoint", AwsCloudWatchEndpoint)
+	l.Debugw("--delete", "delete", rootArgs.enableDelete)
+	l.Debugw("--no-header", "no-header", rootArgs.noHeader)
 	if rootArgs.excludePatten != nil {
-		l.Debug("--exclude-patten", zap.String("AwsSnsTopicPrefix", rootArgs.excludePatten.String()))
+		l.Debug("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String()))
 	}
 	if rootArgs.UnusedSince == "" {
-		l.Sugar().Fatal("missing --since")
+		l.Fatal("missing --since")
 	}
 }
 func GetSQSMetricDataInput(start *time.Time, end *time.Time, queueURL *string) *cloudwatch.GetMetricDataInput {
-	l.Sugar().Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
-	l.Sugar().Debugf("Time: start %s", start.UTC().String())
-	l.Sugar().Debugf("Time: end %s", end.UTC().String())
-	l.Sugar().Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
+	l.Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
+	l.Debugf("Time: start %s", start.UTC().String())
+	l.Debugf("Time: end %s", end.UTC().String())
+	l.Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
 	return &cloudwatch.GetMetricDataInput{
 		EndTime:       end,
 		MaxDatapoints: aws.Int64(maxCloudWatchMaxDatapoint),
@@ -242,7 +242,7 @@ func sqsQueueURLToQueueName(queueURL *string) *string {
 func awsSQSDelete(queues map[string][]string) map[string][]string {
 	m := make(map[string][]string)
 	for queue := range queues {
-		l.Sugar().Debug("SQS: delete ", queue)
+		l.Debug("SQS: delete ", queue)
 		_, err := sqsSvc.DeleteQueue(&sqs.DeleteQueueInput{QueueUrl: &queue})
 		m[queue] = []string{*sqsQueueURLToQueueName(&queue), func(err error) string {
 			if err != nil {

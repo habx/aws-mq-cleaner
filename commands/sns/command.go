@@ -1,4 +1,4 @@
-// Package sqs implements the 'aws sns'  sub-command.
+// Package sqs implements the 'aws sns' sub-command.
 package sns
 
 import (
@@ -34,7 +34,7 @@ var (
 		PreRun:  validation,
 		Run:     runCommand,
 	}
-	l        *zap.Logger
+	l        *zap.SugaredLogger
 	rootArgs rootArguments
 	snsSvc   *sns.SNS
 	mux      sync.RWMutex
@@ -49,7 +49,7 @@ type rootArguments struct {
 func defaultArguments() rootArguments {
 	excludePatten, err := helpers.InitExcludePattern(flags.ExcludePatten)
 	if err != nil {
-		l.Sugar().Fatalf(err.Error())
+		l.Fatalf(err.Error())
 	}
 	return rootArguments{
 		enableDelete:  flags.Delete,
@@ -65,15 +65,15 @@ func init() {
 }
 
 func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	l = logger.GetLogger(flags.LogLevel)
+	l = logger.GetLogger(flags.LogLevel).Sugar()
 	rootArgs = defaultArguments()
-	l.Debug("--sns-endpoint", zap.String("AwsSnsEndpoint", AwsSnsEndpoint))
-	l.Debug("--max-topics", zap.Int("AwsSnsMaxTopic", AwsSnsMaxTopic))
-	l.Debug("--topic-prefix", zap.String("AwsSnsTopicPrefix", AwsSnsTopicPrefix))
-	l.Debug("--delete", zap.Bool("delete", rootArgs.enableDelete))
-	l.Debug("--no-header", zap.Bool("no-header", rootArgs.noHeader))
+	l.Debug("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
+	l.Debug("--max-topics", "AwsSnsMaxTopic", AwsSnsMaxTopic)
+	l.Debug("--topic-prefix", "AwsSnsTopicPrefix", AwsSnsTopicPrefix)
+	l.Debug("--delete", "delete", rootArgs.enableDelete)
+	l.Debug("--no-header", "no-header", rootArgs.noHeader)
 	if rootArgs.excludePatten != nil {
-		l.Debug("--exclude-patten", zap.String("AwsSnsTopicPrefix", rootArgs.excludePatten.String()))
+		l.Debug("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
 	}
 }
 
@@ -112,7 +112,7 @@ func runCommand(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSNSToClean() map[string][]string {
-	l.Sugar().Debug("AWS: init sns session")
+	l.Debug("AWS: init sns session")
 	snsSvc = sns.New(helpers.GetAwsSession(AwsSnsEndpoint))
 
 	var nextToken *string
@@ -121,7 +121,7 @@ func awsSNSToClean() map[string][]string {
 	for {
 		topicsReq, err := snsSvc.ListTopics(&sns.ListTopicsInput{NextToken: nextToken})
 		if err != nil {
-			l.Sugar().Fatal(err)
+			l.Fatal(err)
 		}
 		topics = append(topics, topicsReq.Topics...)
 		if topicsReq.NextToken != nil {
@@ -139,7 +139,7 @@ func awsSNSToClean() map[string][]string {
 		for _, topic := range topics {
 			if topic.TopicArn != nil {
 				if regexp.MustCompile(`^` + AwsSnsTopicPrefix).MatchString(*snsTopicARNToTopicName(topic.TopicArn)) {
-					l.Sugar().Debug("SNS: match prefix (", *topic.TopicArn, ")")
+					l.Debug("SNS: match prefix (", *topic.TopicArn, ")")
 					_topics = append(_topics, topic)
 				}
 			}
@@ -147,35 +147,35 @@ func awsSNSToClean() map[string][]string {
 		topics = _topics
 	}
 
-	l.Sugar().Debug("AWS: before truncate list topics len (", len(topics), ")")
+	l.Debug("AWS: before truncate list topics len (", len(topics), ")")
 	if AwsSnsMaxTopic < len(topics) {
 		topics = topics[:AwsSnsMaxTopic]
 	}
-	l.Sugar().Debug("AWS: list topics len (", len(topics), ")")
+	l.Debug("AWS: list topics len (", len(topics), ")")
 	var wg sync.WaitGroup
 	wg.Add(len(topics))
 	for _, topic := range topics {
 		go func(topicARN *string) {
 			if rootArgs.excludePatten != nil {
 				if rootArgs.excludePatten.MatchString(*snsTopicARNToTopicName(topicARN)) {
-					l.Sugar().Debug("SNS: Skipping (exclude patten) " + *snsTopicARNToTopicName(topicARN))
+					l.Debug("SNS: Skipping (exclude patten) " + *snsTopicARNToTopicName(topicARN))
 					wg.Done()
 					return
 				}
 			}
 			if topicARN != nil {
-				l.Sugar().Debug("SNS: ", *topicARN)
+				l.Debug("SNS: ", *topicARN)
 				topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
 				if err != nil {
-					l.Sugar().Fatal(err)
+					l.Fatal(err)
 				}
 				topicSubscriptionsSum := 0
 				if topicAttributes != nil {
 					for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
 						// subscriptionsConfirmed
-						l.Sugar().Debug("SNS: "+topicAttributesName, "/", *topicAttributesValue)
+						l.Debug("SNS: "+topicAttributesName, "/", *topicAttributesValue)
 						if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
-							l.Sugar().Debug("SNS: ", *topicARN, "/", topicAttributesName, " : ", *topicAttributesValue)
+							l.Debug("SNS: ", *topicARN, "/", topicAttributesName, " : ", *topicAttributesValue)
 							if topicAttributesValue != nil {
 								value, err := strconv.Atoi(*topicAttributesValue)
 								if err != nil {
@@ -186,12 +186,12 @@ func awsSNSToClean() map[string][]string {
 						}
 					}
 					if topicSubscriptionsSum == subscriptionsSumZero {
-						l.Sugar().Debug("SNS: ", *topicARN, " unused")
+						l.Debug("SNS: ", *topicARN, " unused")
 						mux.Lock()
 						m[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
 						mux.Unlock()
 					} else {
-						l.Sugar().Debug("SNS: ", *topicARN, " used")
+						l.Debug("SNS: ", *topicARN, " used")
 					}
 				}
 			}
@@ -209,7 +209,7 @@ func snsTopicARNToTopicName(topicARN *string) *string {
 func awsSNSDelete(topics map[string][]string) map[string][]string {
 	m := make(map[string][]string)
 	for topicARN := range topics {
-		l.Sugar().Debug("SNS: delete ", topicARN)
+		l.Debug("SNS: delete ", topicARN)
 		_, err := snsSvc.DeleteTopic(&sns.DeleteTopicInput{TopicArn: &topicARN})
 		m[topicARN] = []string{*snsTopicARNToTopicName(&topicARN), func(err error) string {
 			if err != nil {
