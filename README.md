@@ -22,6 +22,8 @@ If `NumberOfMessagesReceived` and `NumberOfEmptyReceipts` are at zero I consider
 
 If `subscriptionsConfirmed` and `subscriptionsPending` are at zero I consider the topic to be more used.
 
+> **_NOTE:_** You can add a tag to read an "update date" to define if you should delete the topic or the queue. This tag is configurable, you can define it via the [Docs](docs/aws-mq-cleaner.md)
+
 
 ## Install
 

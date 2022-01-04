@@ -30,9 +30,9 @@ var (
 		Use:     "sqs",
 		Aliases: []string{"sqs"},
 		Short:   "AWS SQS",
-		Long: `This command wi	ll identify the queues to be cleaned.`,
-		PreRun: validation,
-		Run:    printResult,
+		Long:    `This command will identify the queues to be cleaned.`,
+		PreRun:  validation,
+		Run:     printResult,
 	}
 	l        *zap.SugaredLogger
 	rootArgs rootArguments
@@ -44,6 +44,7 @@ func init() {
 	Command.Flags().StringVarP(&AwsSqsEndpoint, "sqs-endpoint", "", "", "SQS endpoint")
 	Command.Flags().StringVarP(&AwsCloudWatchEndpoint, "cloudwatch-endpoint", "", "", "CloudWatch endpoint")
 	Command.Flags().StringVarP(&AwsSQSQueuePrefix, "queue-prefix", "", "", "SQS queue prefix")
+	Command.Flags().StringVarP(&CheckTagNameUpdateDate, "check-tag-name-update-date", "", "", "Define tag name for check update date")
 	Command.Flags().StringVarP(&UnusedSince, "since", "", "7d", "Filter with keyword since=2h")
 }
 
@@ -88,10 +89,12 @@ func awsSQSToClean() map[string][]string {
 	l.Debug("AWS: init cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
 	now := time.Now()
+	l.Debug("AWS: list queues")
 	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
 		l.Fatal(err)
 	}
+	l.Debugf("AWS: queues number %d", len(listQueues.QueueUrls))
 	m := make(map[string][]string)
 
 	var wg sync.WaitGroup
@@ -103,6 +106,18 @@ func awsSQSToClean() map[string][]string {
 				if rootArgs.excludePatten != nil {
 					if rootArgs.excludePatten.MatchString(*sqsQueueURLToQueueName(qURL)) {
 						l.Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
+						wg.Done()
+						return
+					}
+				}
+				if CheckTagNameUpdateDate != "" {
+					l.Debug("AWS: update date tag enabled")
+					skip, err := updateDateToDelete(qURL)
+					if err != nil {
+						l.Warnf("cannot check tag name date update: %v", err)
+					}
+					if skip {
+						l.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(qURL))
 						wg.Done()
 						return
 					}
@@ -188,10 +203,12 @@ func validation(cmd *cobra.Command, cmdLineArgs []string) {
 	}
 }
 func GetSQSMetricDataInput(start *time.Time, end *time.Time, queueURL *string) *cloudwatch.GetMetricDataInput {
-	l.Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
-	l.Debugf("Time: start %s", start.UTC().String())
-	l.Debugf("Time: end %s", end.UTC().String())
-	l.Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
+	if l != nil {
+		l.Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
+		l.Debugf("Time: start %s", start.UTC().String())
+		l.Debugf("Time: end %s", end.UTC().String())
+		l.Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
+	}
 	return &cloudwatch.GetMetricDataInput{
 		EndTime:       end,
 		MaxDatapoints: aws.Int64(maxCloudWatchMaxDatapoint),
@@ -239,6 +256,32 @@ func sqsQueueURLToQueueName(queueURL *string) *string {
 	return &split[len(split)-1]
 }
 
+// return true if the topic should be skipped
+func updateDateToDelete(queueURL *string) (bool, error) {
+	queueTags, err := sqsSvc.ListQueueTags(&sqs.ListQueueTagsInput{QueueUrl: queueURL})
+	if err != nil {
+		return false, err
+	}
+	for k, v := range queueTags.Tags {
+		if k == CheckTagNameUpdateDate {
+			if v == nil {
+				return false, nil
+			}
+			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *v)
+			if err != nil {
+				return false, err
+			}
+			if dataTime.After(*rootArgs.UnusedSinceDate) {
+				l.Infow("queue is not old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
+				return true, nil
+			} else {
+				l.Infow("queue is old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
+				return false, nil
+			}
+		}
+	}
+	return false, err
+}
 func awsSQSDelete(queues map[string][]string) map[string][]string {
 	m := make(map[string][]string)
 	for queue := range queues {
