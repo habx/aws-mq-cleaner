@@ -249,10 +249,11 @@ func updateDateToDelete(topicArn *string) (bool, error) {
 				return false, err
 			}
 			if dataTime.After(*rootArgs.UnusedSinceDate) {
-				l.Infof("%s is not old (%s) enough to delete", *topicArn, dataTime.String())
+				l.Infow("topic is not old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+
 				return true, nil
 			} else {
-				l.Infof("%s is old (%s) enough to delete", *topicArn, dataTime.String())
+				l.Infow("topic is old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
 				return false, nil
 			}
 		}
