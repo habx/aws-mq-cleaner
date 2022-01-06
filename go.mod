@@ -3,7 +3,7 @@ module github.com/habx/aws-mq-cleaner
 go 1.15
 
 require (
-	github.com/aws/aws-sdk-go v1.42.28
+	github.com/aws/aws-sdk-go v1.42.29
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/pkg/errors v0.9.1
 	github.com/smartystreets/goconvey v1.7.2
