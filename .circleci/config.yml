@@ -141,6 +141,7 @@ jobs:
     <<: *docker_buildpack_deps_python_configuration
     working_directory: /go/src/github.com/habx/aws-mq-cleaner
     steps:
+      - setup_remote_docker
       - checkout
       - attach_workspace:
           at: /go/src/github.com/habx/aws-mq-cleaner
@@ -169,7 +170,7 @@ jobs:
               ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -replace `git describe --tags` ./dist/
 
 orbs:
-  docker: circleci/docker@1.0.0
+  docker: circleci/docker@2.0.1
 # --- END --- #
 # --------------------------------------------------- #
 # -------------- DEFINE YOUR WORKFLOW --------------- #
