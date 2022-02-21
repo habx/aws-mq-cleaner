@@ -7,6 +7,9 @@
     "rangeStrategy": "bump",
     "enabledManagers": ["gomod", "dockerfile"],
     "labels": [ "dependencies" ],
+    "schedule": [
+      "before 6:00am on Monday"
+    ],
     "packageRules": [
       {
         "updateTypes": ["patch", "pin", "digest"],
@@ -19,7 +22,11 @@
           "^github.com/habx/"
         ],
         "automerge": true,
-        "addLabels": ["automerge-noupdate"]
+        "addLabels": ["automerge-noupdate"],
+        "schedule": [
+          "at any time"
+        ],
+        "prPriority": 5
       }
     ]
   }
