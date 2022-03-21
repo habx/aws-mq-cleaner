@@ -170,7 +170,7 @@ jobs:
               ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -replace `git describe --tags` ./dist/
 
 orbs:
-  docker: circleci/docker@2.0.1
+  docker: circleci/docker@2.0.3
 # --- END --- #
 # --------------------------------------------------- #
 # -------------- DEFINE YOUR WORKFLOW --------------- #
