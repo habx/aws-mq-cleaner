@@ -5,7 +5,7 @@ alias:
 # - Docker configuration - #
   - &docker_golang_configuration
     docker:
-      - image: cimg/go:1.16.5
+      - image: cimg/go:1.17.8
         user: root
   - &docker_buildpack_deps_configuration
     docker:
@@ -17,7 +17,7 @@ alias:
         user: root
   - &docker_golang_with_localstack_configuration
     docker:
-      - image: cimg/go:1.16.5
+      - image: cimg/go:1.17.8
         user: root
       - image: localstack/localstack
         name: localstack
@@ -156,7 +156,7 @@ jobs:
 
   publish-github-release:
       docker:
-        - image: cimg/go:1.16.5
+        - image: cimg/go:1.17.8
       working_directory: /go/src/github.com/habx/aws-mq-cleaner
       steps:
         - checkout
