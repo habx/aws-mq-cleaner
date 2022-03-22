@@ -2,209 +2,90 @@ version: 2.1
 
 # --- Anchor alias ---- #
 alias:
-# - Docker configuration - #
-  - &docker_golang_configuration
-    docker:
-      - image: cimg/go:1.16.5
-        user: root
-  - &docker_buildpack_deps_configuration
-    docker:
-      - image: circleci/buildpack-deps:stretch
-        user: root
-  - &docker_buildpack_deps_python_configuration
-    docker:
-      - image: cimg/python:3.8.1
-        user: root
-  - &docker_golang_with_localstack_configuration
-    docker:
-      - image: cimg/go:1.16.5
-        user: root
-      - image: localstack/localstack
-        name: localstack
-        environment:
-          SERVICES: sqs,sns,cloudwatch
-          DEFAULT_REGION: eu-west-1
-# - Jobs filters - #
-  - &filters_ignore_tags
+# ---- Jobs filters ---- #
+  - &filters_only_dev
+    branches:
+      only: dev
     tags:
       ignore: /.*/
-  - &filters_allow_tags_all_branche
-    tags:
-      only: /^v.*/
-    branches:
-      only: /.*/
-  - &filters_allow_tags
-    tags:
-      only: /^v.*/
-  - &filters_allow_branch_dev
-    branches:
-      only:
-        - dev
-  - &filters_ignore_branch_dev
+  - &filters_only_branch
     branches:
       ignore:
-        - /dev.*/
-  - &filters_ignore_branch_allow_tags
+        - dev
     tags:
-      only: /^v.*/
+      ignore: /.*/
+  - &filters_only_tags
     branches:
       ignore: /.*/
-  - &golang_with_cache_restore_deps
-    restore_cache:
-      keys:
-        - >-
-          golang-deps-prod-{{ .Branch }}-{{ checksum "go.mod" }}
-        - >-
-          golang-deps-prod-{{ .Branch }}
-        - >-
-          golang-deps-prod
-  - &golang_with_cache_save_deps
-    save_cache:
-      key: >-
-        golang-deps-prod-{{ .Branch }}-{{ checksum "go.mod" }}
-      paths:
-        - "/go/pkg/mod"
-  - &golang_get_mod
-    run:
-      name: mod download
-      command: |
-        rm /root/.gitconfig
-        git config --global url."https://habxtech:${FETCH_GOLANG_LIBS}@github.com".insteadOf "https://github.com"
-        GO111MODULE=on go mod download
-        GO111MODULE=on go mod vendor
+    tags:
+      only: /^v.*/
 
-# --- Anchor alias ---- #
-jobs:
-  static-test:
-    <<: *docker_golang_configuration
-    working_directory: /go/src/github.com/habx/aws-mq-cleaner
-    steps:
-      - checkout
-      - *golang_with_cache_restore_deps
-      - *golang_get_mod
-      - *golang_with_cache_save_deps
-      - run:
-          name: Download golang golangci-lint
-          command: |
-            curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.21.0
-      - run:
-          name: Exec tests
-          command: |
-            golangci-lint run
-  test:
-    <<: *docker_golang_with_localstack_configuration
-    working_directory: /go/src/github.com/habx/aws-mq-cleaner
-    steps:
-      - checkout
-      - *golang_with_cache_restore_deps
-      - *golang_get_mod
-      - *golang_with_cache_save_deps
-      - run:
-          name: Exec tests
-          command: |
-            sleep 5
-            go test -v $(go list ./... | grep -v "vendor") -covermode=atomic -coverprofile=coverage.txt
-            go tool cover -html=coverage.txt -o coverage.html
-            mv coverage.html /tmp/artifacts
-            bash <(curl -s https://codecov.io/bash)
-          environment:
-            TEST_SQS_ENDPOINT: http://localstack:4566
-            TEST_SNS_ENDPOINT: http://localstack:4566
-            TEST_CLOUDWATCH_ENDPOINT: http://localstack:4566
-            AWS_REGION: eu-west-1
-            AWS_SECRET_ACCESS_KEY: foobar
-            AWS_ACCESS_KEY_ID: foorbar
-  build:
-    <<: *docker_golang_configuration
-    working_directory: /go/src/github.com/habx/aws-mq-cleaner
-    steps:
-      - checkout
-      - *golang_with_cache_restore_deps
-      - *golang_get_mod
-      - run: go get -u github.com/mitchellh/gox
-      - run: go get -u github.com/tcnksm/ghr
-      - *golang_get_mod
-      - *golang_with_cache_save_deps
-      - run:
-          name: cross compile
-          command: |
-            CGO_ENABLED=0 gox -os="linux darwin" -parallel=10 -arch="amd64" -ldflags "-X main.version=$CIRCLE_TAG" -output="dist/{{.Dir}}_{{.OS}}_{{.Arch}}"
-            cd dist/ && gzip * && cd ..
-      - store_artifacts:
-          path: dist
-      - persist_to_workspace:
-          root: /go/src/github.com/habx/aws-mq-cleaner
-          paths:
-            - dist
-
-  build_container:
-    <<: *docker_buildpack_deps_python_configuration
-    working_directory: /go/src/github.com/habx/aws-mq-cleaner
-    steps:
-      - setup_remote_docker
-      - checkout
-      - attach_workspace:
-          at: /go/src/github.com/habx/aws-mq-cleaner
-      - docker/check
-      - docker/build:
-          image: habx/${CIRCLE_PROJECT_REPONAME}
-          tag: $CIRCLE_TAG
-          extra_build_args: --build-arg REVISION="$(git rev-parse --short HEAD)" --build-arg CREATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --build-arg VERSION="$CIRCLE_TAG" --build-arg TITLE="${CIRCLE_PROJECT_REPONAME}" --build-arg SOURCE="${CIRCLE_REPOSITORY_URL}" --build-arg AUTHORS="${CIRCLE_USERNAME}"
-      - docker/push:
-          image: habx/${CIRCLE_PROJECT_REPONAME}
-          tag: $CIRCLE_TAG
-
-  publish-github-release:
-      docker:
-        - image: cimg/go:1.16.5
-      working_directory: /go/src/github.com/habx/aws-mq-cleaner
-      steps:
-        - checkout
-        - attach_workspace:
-            at: /go/src/github.com/habx/aws-mq-cleaner
-        - run:
-            name: create release
-            command: |
-              go get -u github.com/tcnksm/ghr
-              git describe --tags
-              ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -replace `git describe --tags` ./dist/
-
-orbs:
-  docker: circleci/docker@2.0.1
 # --- END --- #
 # --------------------------------------------------- #
 # -------------- DEFINE YOUR WORKFLOW --------------- #
 # --------------------------------------------------- #
+orbs:
+  go: habx/golang@0.8.0
+  docker: circleci/docker@2.0.3
+
+docker-config: &docker-config
+  extra_build_args: --build-arg REVISION="$(git rev-parse --short HEAD)" --build-arg CREATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --build-arg VERSION="$CIRCLE_TAG" --build-arg TITLE="${CIRCLE_PROJECT_REPONAME}" --build-arg SOURCE="${CIRCLE_REPOSITORY_URL}" --build-arg AUTHORS="${CIRCLE_USERNAME}"
+  image: habx/${CIRCLE_PROJECT_REPONAME}
+  tag: $CIRCLE_TAG
+
 workflows:
-  test:
+  tests:
     jobs:
-      - static-test:
+      - go/static-tests:
+          context: go_public
+          github-config-private-package: false
           filters:
-            <<: *filters_ignore_tags
-      - test:
+            <<: *filters_only_branch
+      - go/tests-localstack-and-pg:
+          context: go_public
+          github-config-private-package: false
           filters:
-            <<: *filters_ignore_tags
-      - build:
+            <<: *filters_only_branch
+      - go/build:
+          context: go_public
+          github-config-private-package: false
+          dry-run-release: true
           requires:
-            - static-test
-            - test
+            - go/static-tests
+            - go/tests-localstack-and-pg
           filters:
-            <<: *filters_ignore_tags
+            <<: *filters_only_branch
+
+  dev:
+    jobs:
+      - go/build:
+          context: go_public
+          github-config-private-package: false
+          dry-run-release: true
+          filters:
+            <<: *filters_only_dev
+      - docker/publish:
+          context: go_public
+          deploy: false
+          <<: *docker-config
+          filters:
+            <<: *filters_only_dev
+          requires:
+            - go/build
 
   release:
     jobs:
-      - build:
-          filters:
-            <<: *filters_ignore_branch_allow_tags
-      - publish-github-release:
+      - go/build:
           context: go_public
-          requires:
-            - build
+          github-config-private-package: false
+          dry-run-release: false
           filters:
-            <<: *filters_ignore_branch_allow_tags
-      - build_container:
+            <<: *filters_only_tags
+      - docker/publish:
           context: go_public
-          requires:
-            - build
+          deploy: true
+          <<: *docker-config
           filters:
-            <<: *filters_ignore_branch_allow_tags
+            <<: *filters_only_tags
+          requires:
+            - go/build

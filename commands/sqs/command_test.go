@@ -1,6 +1,10 @@
 package sqs_test
 
 import (
+	"strconv"
+	"testing"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/sqs"
@@ -8,14 +12,11 @@ import (
 	here "github.com/habx/aws-mq-cleaner/commands/sqs"
 	"github.com/habx/aws-mq-cleaner/helpers"
 	. "github.com/smartystreets/goconvey/convey"
-	"strconv"
-	"testing"
-	"time"
 )
 
 func Test_SQS(t *testing.T) {
-	sqsLocalStack := helpers.GetEnv("TEST_SQS_ENDPOINT", "http://localhost:4566")
-	cloudWatchLocalStack := helpers.GetEnv("TEST_CLOUDWATCH_ENDPOINT", "http://localhost:4566")
+	sqsLocalStack := helpers.GetEnv("TEST_SQS_ENDPOINT", "http://localhost.localstack.cloud:4566")
+	cloudWatchLocalStack := helpers.GetEnv("TEST_CLOUDWATCH_ENDPOINT", "http://localhost.localstack.cloud:4566")
 	queue := CreateQueue(sqsLocalStack)
 	queue = CreateQueue(sqsLocalStack)
 	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
@@ -48,7 +49,7 @@ func Test_SQS(t *testing.T) {
 	})
 
 	Convey("sqs: enable delete", t, func() {
-		args := []string{"--loglevel=debug", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "-d","--no-header=true"}
+		args := []string{"--loglevel=debug", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "-d", "--no-header=true"}
 		commands.RootCommand.SetArgs(args)
 		err := commands.RootCommand.Execute()
 		So(err, ShouldBeNil)
@@ -56,7 +57,7 @@ func Test_SQS(t *testing.T) {
 	queue = CreateQueue(sqsLocalStack)
 	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
 	Convey("sqs: queue exclude pattern test", t, func() {
-		args := []string{"--loglevel=debug", "--exclude-patten=test*",  "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "--queue-prefix=test"}
+		args := []string{"--loglevel=debug", "--exclude-patten=test*", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "--queue-prefix=test"}
 		commands.RootCommand.SetArgs(args)
 		err := commands.RootCommand.Execute()
 		So(err, ShouldBeNil)
@@ -67,13 +68,13 @@ func Test_SQS(t *testing.T) {
 	queue = CreateQueue(sqsLocalStack)
 	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
 	Convey("sqs: enable delete with invalid metric", t, func() {
-		args := []string{"--loglevel=debug",  "--exclude-patten=xx", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "-d=true","--no-header=false", "--since=10d"}
+		args := []string{"--loglevel=debug", "--exclude-patten=xx", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack, "-d=true", "--no-header=false", "--since=10d"}
 		commands.RootCommand.SetArgs(args)
 		err := commands.RootCommand.Execute()
 		So(err, ShouldBeNil)
 	})
 }
-func CreateQueue(endpoint string) *sqs.CreateQueueOutput{
+func CreateQueue(endpoint string) *sqs.CreateQueueOutput {
 	sqsSvc := sqs.New(helpers.GetAwsSession(endpoint))
 	queueOutput, err := sqsSvc.CreateQueue(&sqs.CreateQueueInput{QueueName: aws.String("testing"),
 		Tags: map[string]*string{
@@ -84,9 +85,9 @@ func CreateQueue(endpoint string) *sqs.CreateQueueOutput{
 	}
 	return queueOutput
 }
-func CreateQueueWithOldDate(endpoint string) *sqs.CreateQueueOutput{
+func CreateQueueWithOldDate(endpoint string) *sqs.CreateQueueOutput {
 	sqsSvc := sqs.New(helpers.GetAwsSession(endpoint))
-	queueOutput, err := sqsSvc.CreateQueue(&sqs.CreateQueueInput{QueueName: aws.String("testing-"+ strconv.Itoa(int(time.Now().Unix()))),
+	queueOutput, err := sqsSvc.CreateQueue(&sqs.CreateQueueInput{QueueName: aws.String("testing-" + strconv.Itoa(int(time.Now().Unix()))),
 		Tags: map[string]*string{
 			"update_date": aws.String("2020-01-02T15:04:05.000-03:00"),
 		}})
@@ -110,15 +111,14 @@ func CreateMetrics(endpoint string, queueURL *string) {
 	for _, query := range x.MetricDataQueries {
 
 		new := cloudwatch.MetricDatum{
-			Dimensions:        query.MetricStat.Metric.Dimensions,
-			MetricName:        query.MetricStat.Metric.MetricName,
-			Timestamp:         aws.Time(now.Add(10 - time.Minute)),
-			Unit:              aws.String("Count"),
-			Value:             aws.Float64(0),
+			Dimensions: query.MetricStat.Metric.Dimensions,
+			MetricName: query.MetricStat.Metric.MetricName,
+			Timestamp:  aws.Time(now.Add(10 - time.Minute)),
+			Unit:       aws.String("Count"),
+			Value:      aws.Float64(0),
 			Counts: []*float64{
 				aws.Float64(1),
 			},
-
 		}
 		new.StorageResolution = aws.Int64(1)
 		metricsList = append(metricsList, &new)
@@ -131,6 +131,7 @@ func CreateMetrics(endpoint string, queueURL *string) {
 		panic(err)
 	}
 }
+
 //func CreateInvalidMetrics(endpoint string, queueURL *string) {
 //	cwSvc := cloudwatch.New(helpers.GetAwsSession(endpoint))
 //	aws.String("2021-01-24T00:00:00.000-03:00")

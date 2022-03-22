@@ -1,9 +1,10 @@
 package sns_test
 
 import (
-	"github.com/habx/aws-mq-cleaner/commands"
 	"strconv"
 	"time"
+
+	"github.com/habx/aws-mq-cleaner/commands"
 
 	"github.com/aws/aws-sdk-go/aws"
 
@@ -13,7 +14,8 @@ import (
 	"github.com/habx/aws-mq-cleaner/helpers"
 	. "github.com/smartystreets/goconvey/convey"
 )
-var snsLocalStack = helpers.GetEnv("TEST_SNS_ENDPOINT", "http://localhost:4566")
+
+var snsLocalStack = helpers.GetEnv("TEST_SNS_ENDPOINT", "http://localhost.localstack.cloud:4566")
 
 func Test_SNS(t *testing.T) {
 
@@ -71,7 +73,7 @@ func Test_SNS(t *testing.T) {
 		})
 
 		Convey("sns: enable delete and header", func() {
-			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "-d=true","--no-header=true", "--topic-prefix="}
+			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "-d=true", "--no-header=true", "--topic-prefix="}
 			commands.RootCommand.SetArgs(args)
 			err := commands.RootCommand.Execute()
 			So(err, ShouldBeNil)
