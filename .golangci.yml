@@ -48,6 +48,12 @@ linters:
     - wsl
     - funlen
     - bodyclose
+    - exhaustivestruct
+    - nlreturn
+    - paralleltest
+    - cyclop
+    - nestif
+
   fast: false
 
 linters-settings:
@@ -71,13 +77,6 @@ linters-settings:
   gofmt:
     # simplify code: gofmt with `-s` option, true by default
     simplify: true
-  goimports:
-    # put imports beginning with prefix after 3rd-party packages;
-    # it's a comma-separated list of prefixes
-    local-prefixes: istio.io/
-  maligned:
-    # print struct with more effective memory layout or not, false by default
-    suggest-new: true
   misspell:
     # Correct spellings using locale preferences for US or UK.
     # Default is to use a neutral variety of English.
@@ -183,8 +182,7 @@ issues:
     # Exclude some linters from running on test files.
     - path: _test\.go$|^tests/|^samples/
       linters:
-        - maligned
-        # - errcheck
+         - errcheck
 
   # Independently from option `exclude` we use default exclude patterns,
   # it can be disabled by this option. To list all

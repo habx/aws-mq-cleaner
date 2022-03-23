@@ -1,3 +1,4 @@
+// nolint:testpackage
 package commands
 
 import (
@@ -12,6 +13,7 @@ func Test_RootCommand(t *testing.T) {
 		So(err, ShouldBeNil)
 	})
 }
+
 func Test_Version(t *testing.T) {
 	Convey("RootCommand: version", t, func() {
 		RootCommand.SetArgs([]string{"version"})
