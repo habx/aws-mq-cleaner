@@ -1,0 +1,30 @@
+---
+project_name: aws-mq-cleaner
+
+release:
+  github:
+    owner: habx
+    name: aws-mq-cleaner
+
+builds:
+  - binary: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    main: ./
+    ldflags: -s -w -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    wrap_in_directory: true
+    name_template: '{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    files:
+      - README.md
+
+checksum:
+  name_template: '{{ .ProjectName }}-{{ .Version }}-checksums.txt'

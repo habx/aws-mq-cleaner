@@ -9,18 +9,22 @@ import (
 	"github.com/pkg/errors"
 )
 
-const dayHour = 24
-const matchLen = 3
+const (
+	dayHour  = 24
+	matchLen = 3
+)
 
 var durationRegex = regexp.MustCompile(`^(\d+)([smhd])$`)
 
-// ParseDuration parses a duration string and returns the time.Duration
+// ParseDuration parses a duration string and returns the time.Duration.
 func ParseDuration(duration string) (*time.Duration, error) {
+	const base = 10
+	const bitSize = 10
 	matches := durationRegex.FindStringSubmatch(duration)
 	if len(matches) != matchLen {
-		return nil, errors.Errorf("Invalid since format '%s'. Expected format <duration><unit> (e.g. 3h)\n", duration)
+		return nil, errors.Errorf("invalid since format '%s'. expected format <duration><unit> (e.g. 3h)", duration)
 	}
-	amount, err := strconv.ParseInt(matches[1], 10, 64)
+	amount, err := strconv.ParseInt(matches[1], base, bitSize)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,7 +43,7 @@ func ParseDuration(duration string) (*time.Duration, error) {
 	return &dur, nil
 }
 
-// ParseSince parses a duration string and returns a time.Time in history relative to current time
+// ParseSince parses a duration string and returns a time.Time in history relative to current time.
 func ParseSince(duration string) (*time.Time, error) {
 	dur, err := ParseDuration(duration)
 	if err != nil {

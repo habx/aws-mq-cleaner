@@ -1,13 +1,14 @@
-package time
+package time_test
 
 import (
 	"testing"
 	"time"
 
+	customTime "github.com/habx/aws-mq-cleaner/time"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestParseDuration tests TestParseDuration
+// TestParseDuration tests TestParseDuration.
 func TestParseDuration(t *testing.T) {
 	type testData struct {
 		duration string
@@ -23,17 +24,17 @@ func TestParseDuration(t *testing.T) {
 		{"2d", 48 * time.Hour},
 	}
 	for _, data := range testdata {
-		dur, err := ParseDuration(data.duration)
+		dur, err := customTime.ParseDuration(data.duration)
 		assert.Nil(t, err)
 		assert.Equal(t, dur.Nanoseconds(), data.xVal.Nanoseconds())
 	}
-	_, err := ParseDuration("1z")
+	_, err := customTime.ParseDuration("1z")
 	assert.NotNil(t, err)
 }
 
-// TestParseSince tests parsing of since strings
+// TestParseSince tests parsing of since strings.
 func TestParseSince(t *testing.T) {
-	oneDayAgo, err := ParseSince("1d")
+	oneDayAgo, err := customTime.ParseSince("1d")
 	assert.Nil(t, err)
 	yesterday := time.Now().UTC().Add(-24 * time.Hour)
 	assert.Equal(t, yesterday.Minute(), oneDayAgo.Minute())
