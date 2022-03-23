@@ -38,17 +38,14 @@ workflows:
   tests:
     jobs:
       - go/static-tests:
-          context: go_public
           github-config-private-package: false
           filters:
             <<: *filters_only_branch
       - go/tests-localstack-and-pg:
-          context: go_public
           github-config-private-package: false
           filters:
             <<: *filters_only_branch
       - go/build:
-          context: go_public
           github-config-private-package: false
           dry-run-release: true
           requires:
@@ -60,13 +57,11 @@ workflows:
   dev:
     jobs:
       - go/build:
-          context: go_public
           github-config-private-package: false
           dry-run-release: true
           filters:
             <<: *filters_only_dev
       - docker/publish:
-          context: go_public
           deploy: false
           <<: *docker-config
           filters:
@@ -77,7 +72,6 @@ workflows:
   release:
     jobs:
       - go/build:
-          context: go_public
           github-config-private-package: false
           dry-run-release: false
           filters:
