@@ -1,22 +1,20 @@
 package sns_test
 
 import (
-	"github.com/habx/aws-mq-cleaner/commands"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-
-	"testing"
-
 	"github.com/aws/aws-sdk-go/service/sns"
+	"github.com/habx/aws-mq-cleaner/commands"
 	"github.com/habx/aws-mq-cleaner/helpers"
 	. "github.com/smartystreets/goconvey/convey"
 )
-var snsLocalStack = helpers.GetEnv("TEST_SNS_ENDPOINT", "http://localhost:4566")
+
+var snsLocalStack = helpers.GetEnv("TEST_SNS_ENDPOINT", "http://localhost.localstack.cloud:4566")
 
 func Test_SNS(t *testing.T) {
-
 	Convey("sns: bad args ", t, func() {
 		Convey("sns: no args ", func() {
 			err := commands.RootCommand.Execute()
@@ -67,11 +65,10 @@ func Test_SNS(t *testing.T) {
 			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "--topic-prefix=test"}
 			commands.RootCommand.SetArgs(args)
 			commands.RootCommand.Execute()
-			//So(err, ShouldBeNil)
 		})
 
 		Convey("sns: enable delete and header", func() {
-			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "-d=true","--no-header=true", "--topic-prefix="}
+			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "-d=true", "--no-header=true", "--topic-prefix="}
 			commands.RootCommand.SetArgs(args)
 			err := commands.RootCommand.Execute()
 			So(err, ShouldBeNil)

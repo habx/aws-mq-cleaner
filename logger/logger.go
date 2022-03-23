@@ -7,11 +7,10 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var (
-	Logger *zap.Logger
-)
+var Logger *zap.Logger
 
 func initLogger(logLevel string) (*zap.Logger, error) {
+	// nolint:wrapcheck
 	return zap.Config{
 		Level: zap.NewAtomicLevelAt(func(level string) zapcore.Level {
 			if level == "debug" {
@@ -40,7 +39,7 @@ func initLogger(logLevel string) (*zap.Logger, error) {
 	}.Build()
 }
 
-// GetLogger returns a named logger
+// GetLogger returns a named logger.
 func GetLogger(logLevel string) *zap.Logger {
 	if Logger == nil {
 		l, err := initLogger(logLevel)

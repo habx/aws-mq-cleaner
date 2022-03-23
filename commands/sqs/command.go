@@ -2,18 +2,18 @@
 package sqs
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/habx/aws-mq-cleaner/helpers"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/habx/aws-mq-cleaner/flags"
+	"github.com/habx/aws-mq-cleaner/helpers"
 	"github.com/habx/aws-mq-cleaner/logger"
 	t "github.com/habx/aws-mq-cleaner/time"
 	"github.com/olekukonko/tablewriter"
@@ -21,11 +21,13 @@ import (
 	"go.uber.org/zap"
 )
 
-const metricSumZero = 0
-const maxCloudWatchMaxDatapoint = 100
+const (
+	metricSumZero             = 0
+	maxCloudWatchMaxDatapoint = 100
+)
 
 var (
-	// Command performs the "list clusters" function
+	// Command performs the "list clusters" function.
 	Command = &cobra.Command{
 		Use:     "sqs",
 		Aliases: []string{"sqs"},
@@ -34,7 +36,7 @@ var (
 		PreRun:  validation,
 		Run:     printResult,
 	}
-	l        *zap.SugaredLogger
+	log      *zap.SugaredLogger
 	rootArgs rootArguments
 	sqsSvc   *sqs.SQS
 	mux      sync.RWMutex
@@ -59,10 +61,8 @@ func printResult(cmd *cobra.Command, cmdLineArgs []string) {
 			table.SetHeader([]string{"Queue", "Message"})
 		}
 		queues = awsSQSDelete(queues)
-	} else {
-		if !rootArgs.noHeader {
-			table.SetHeader([]string{"Queue"})
-		}
+	} else if !rootArgs.noHeader {
+		table.SetHeader([]string{"Queue"})
 	}
 
 	for _, v := range queues {
@@ -83,80 +83,80 @@ func printResult(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSQSToClean() map[string][]string {
-	l.Debug("AWS: init sqs session")
+	log.Debug("AWS: init sqs session")
 	sqsSvc = sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
 
-	l.Debug("AWS: init cloudwatch session")
+	log.Debug("AWS: init cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
 	now := time.Now()
-	l.Debug("AWS: list queues")
+	log.Debug("AWS: list queues")
 	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
-		l.Fatal(err)
+		log.Fatal(err)
 	}
-	l.Debugf("AWS: queues number %d", len(listQueues.QueueUrls))
-	m := make(map[string][]string)
+	log.Debugf("AWS: queues number %d", len(listQueues.QueueUrls))
+	sqsToClean := make(map[string][]string)
 
-	var wg sync.WaitGroup
-	wg.Add(len(listQueues.QueueUrls))
+	var waitGrp sync.WaitGroup
+	waitGrp.Add(len(listQueues.QueueUrls))
 
 	for _, queueURL := range listQueues.QueueUrls {
 		go func(qURL *string) {
 			if qURL != nil {
 				if rootArgs.excludePatten != nil {
 					if rootArgs.excludePatten.MatchString(*sqsQueueURLToQueueName(qURL)) {
-						l.Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
-						wg.Done()
+						log.Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
+						waitGrp.Done()
 						return
 					}
 				}
 				if CheckTagNameUpdateDate != "" {
-					l.Debug("AWS: update date tag enabled")
+					log.Debug("AWS: update date tag enabled")
 					skip, err := updateDateToDelete(qURL)
 					if err != nil {
-						l.Warnf("cannot check tag name date update: %v", err)
+						log.Warnf("cannot check tag name date update: %v", err)
 					}
 					if skip {
-						l.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(qURL))
-						wg.Done()
+						log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(qURL))
+						waitGrp.Done()
 						return
 					}
 				}
 				metrics, err := cwSvc.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, &now, qURL))
 				if err != nil {
-					l.Fatal(err)
+					log.Fatal(err)
 				}
 				metricsSum := 0.0
 				failed := false
 				for _, result := range metrics.MetricDataResults {
 					if len(result.Values) != 0 {
 						for _, value := range result.Values {
-							l.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") Value : ", *value)
+							log.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") Value : ", *value)
 							metricsSum += *value
 						}
 					} else {
-						l.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") No value : ", *result.Label)
+						log.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") No value : ", *result.Label)
 						failed = true
 					}
 				}
 				if !failed {
 					if metricsSum == metricSumZero {
-						l.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is unused (metricsSum=", metricsSum, ")")
+						log.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is unused (metricsSum=", metricsSum, ")")
 						mux.Lock()
-						m[*qURL] = []string{*sqsQueueURLToQueueName(qURL)}
+						sqsToClean[*qURL] = []string{*sqsQueueURLToQueueName(qURL)}
 						mux.Unlock()
 					} else {
-						l.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is used (metricsSum=", metricsSum, ")")
+						log.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is used (metricsSum=", metricsSum, ")")
 					}
 				} else {
-					l.Debug("SQS: " + *sqsQueueURLToQueueName(qURL) + " failed, invalid metric")
+					log.Debug("SQS: " + *sqsQueueURLToQueueName(qURL) + " failed, invalid metric")
 				}
 			}
-			wg.Done()
+			waitGrp.Done()
 		}(queueURL)
 	}
-	wg.Wait()
-	return m
+	waitGrp.Wait()
+	return sqsToClean
 }
 
 type rootArguments struct {
@@ -170,12 +170,12 @@ type rootArguments struct {
 func defaultAwsSQSArguments() rootArguments {
 	unusedSinceDate, err := t.ParseSince(UnusedSince)
 	if err != nil {
-		l.Error("missing params --since")
-		l.Fatalf(err.Error())
+		log.Error("missing params --since")
+		log.Fatalf(err.Error())
 	}
 	excludePatten, err := helpers.InitExcludePattern(flags.ExcludePatten)
 	if err != nil {
-		l.Fatalf(err.Error())
+		log.Fatalf(err.Error())
 	}
 	return rootArguments{
 		UnusedSince:     UnusedSince,
@@ -187,27 +187,28 @@ func defaultAwsSQSArguments() rootArguments {
 }
 
 func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	l = logger.GetLogger(flags.LogLevel).Sugar()
+	log = logger.GetLogger(flags.LogLevel).Sugar()
 	rootArgs = defaultAwsSQSArguments()
-	l.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
-	l.Debugw("--queue-prefix", "AwsSQSQueuePrefix", AwsSQSQueuePrefix)
-	l.Debugw("--sqs-endpoint", "AwsSqsEndpoint", AwsSqsEndpoint)
-	l.Debugw("--cloudwatch-endpoint", "AwsCloudWatchEndpoint", AwsCloudWatchEndpoint)
-	l.Debugw("--delete", "delete", rootArgs.enableDelete)
-	l.Debugw("--no-header", "no-header", rootArgs.noHeader)
+	log.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
+	log.Debugw("--queue-prefix", "AwsSQSQueuePrefix", AwsSQSQueuePrefix)
+	log.Debugw("--sqs-endpoint", "AwsSqsEndpoint", AwsSqsEndpoint)
+	log.Debugw("--cloudwatch-endpoint", "AwsCloudWatchEndpoint", AwsCloudWatchEndpoint)
+	log.Debugw("--delete", "delete", rootArgs.enableDelete)
+	log.Debugw("--no-header", "no-header", rootArgs.noHeader)
 	if rootArgs.excludePatten != nil {
-		l.Debug("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
+		log.Debug("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
 	}
 	if rootArgs.UnusedSince == "" {
-		l.Fatal("missing --since")
+		log.Fatal("missing --since")
 	}
 }
+
 func GetSQSMetricDataInput(start *time.Time, end *time.Time, queueURL *string) *cloudwatch.GetMetricDataInput {
-	if l != nil {
-		l.Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
-		l.Debugf("Time: start %s", start.UTC().String())
-		l.Debugf("Time: end %s", end.UTC().String())
-		l.Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
+	if log != nil {
+		log.Debugf("Time: delta period %d min", int64(end.Sub(*start).Minutes()))
+		log.Debugf("Time: start %s", start.UTC().String())
+		log.Debugf("Time: end %s", end.UTC().String())
+		log.Debugf("SQS: queueName %s", *sqsQueueURLToQueueName(queueURL))
 	}
 	return &cloudwatch.GetMetricDataInput{
 		EndTime:       end,
@@ -251,48 +252,49 @@ func GetSQSMetricDataInput(start *time.Time, end *time.Time, queueURL *string) *
 		StartTime: start,
 	}
 }
+
 func sqsQueueURLToQueueName(queueURL *string) *string {
 	split := strings.Split(*queueURL, "/")
 	return &split[len(split)-1]
 }
 
-// return true if the topic should be skipped
+// return true if the topic should be skipped.
 func updateDateToDelete(queueURL *string) (bool, error) {
 	queueTags, err := sqsSvc.ListQueueTags(&sqs.ListQueueTagsInput{QueueUrl: queueURL})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("cannot list queue tags '%s': %w", *queueURL, err)
 	}
-	for k, v := range queueTags.Tags {
-		if k == CheckTagNameUpdateDate {
-			if v == nil {
+	for name, value := range queueTags.Tags {
+		if name == CheckTagNameUpdateDate {
+			if value == nil {
 				return false, nil
 			}
-			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *v)
+			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *value)
 			if err != nil {
-				return false, err
+				return false, fmt.Errorf("cannot parse datetime tags '%s' : %w", *value, err)
 			}
 			if dataTime.After(*rootArgs.UnusedSinceDate) {
-				l.Infow("queue is not old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
+				log.Infow("queue is not old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
 				return true, nil
-			} else {
-				l.Infow("queue is old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
-				return false, nil
 			}
+			log.Infow("queue is old enough to delete", "queueURL", *queueURL, "date", dataTime.String())
+			return false, nil
 		}
 	}
-	return false, err
+	return false, nil
 }
+
 func awsSQSDelete(queues map[string][]string) map[string][]string {
-	m := make(map[string][]string)
+	sqsToDelete := make(map[string][]string)
 	for queue := range queues {
-		l.Debug("SQS: delete ", queue)
+		log.Debug("SQS: delete ", queue)
 		_, err := sqsSvc.DeleteQueue(&sqs.DeleteQueueInput{QueueUrl: &queue})
-		m[queue] = []string{*sqsQueueURLToQueueName(&queue), func(err error) string {
+		sqsToDelete[queue] = []string{*sqsQueueURLToQueueName(&queue), func(err error) string {
 			if err != nil {
 				return err.Error()
 			}
 			return "OK"
 		}(err)}
 	}
-	return m
+	return sqsToDelete
 }

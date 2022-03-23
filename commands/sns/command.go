@@ -2,7 +2,7 @@
 package sns
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -24,10 +24,11 @@ const (
 	subscriptionsPending   = "SubscriptionsPending"
 	subscriptionsConfirmed = "SubscriptionsConfirmed"
 	subscriptionsSumZero   = 0
+	maxEpic                = 100
 )
 
 var (
-	// Command performs the "list clusters" function
+	// Command performs the "list clusters" function.
 	Command = &cobra.Command{
 		Use:     "sns",
 		Aliases: []string{"sns"},
@@ -36,7 +37,7 @@ var (
 		PreRun:  validation,
 		Run:     runCommand,
 	}
-	l        *zap.SugaredLogger
+	log      *zap.SugaredLogger
 	rootArgs rootArguments
 	snsSvc   *sns.SNS
 	mux      sync.RWMutex
@@ -53,12 +54,12 @@ type rootArguments struct {
 func defaultArguments() rootArguments {
 	unusedSinceDate, err := t.ParseSince(UnusedSince)
 	if err != nil {
-		l.Error("missing params --since")
-		l.Fatalf(err.Error())
+		log.Error("missing params --since")
+		log.Fatalf(err.Error())
 	}
 	excludePatten, err := helpers.InitExcludePattern(flags.ExcludePatten)
 	if err != nil {
-		l.Fatalf(err.Error())
+		log.Fatalf(err.Error())
 	}
 	return rootArguments{
 		UnusedSince:     UnusedSince,
@@ -74,21 +75,21 @@ func init() {
 	Command.Flags().StringVarP(&CheckTagNameUpdateDate, "check-tag-name-update-date", "", "", "Define tag name for check update date")
 	Command.Flags().StringVarP(&UnusedSince, "since", "", "7d", "Used for 'update date' AWS tag")
 	Command.Flags().StringVarP(&AwsSnsTopicPrefix, "topic-prefix", "", "", "SQS queue prefix")
-	Command.Flags().IntVarP(&AwsSnsMaxTopic, "max-topics", "", 100, "Get max topics (Example: 10) before filtering")
+	Command.Flags().IntVarP(&AwsSnsMaxTopic, "max-topics", "", maxEpic, "Get max topics (Example: 10) before filtering")
 }
 
 func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	l = logger.GetLogger(flags.LogLevel).Sugar()
+	log = logger.GetLogger(flags.LogLevel).Sugar()
 	rootArgs = defaultArguments()
-	l.Debugw("--check-tag-name-update-date", "CheckTagNameUpdateDate", CheckTagNameUpdateDate)
-	l.Debugw("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
-	l.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
-	l.Debugw("--max-topics", "AwsSnsMaxTopic", AwsSnsMaxTopic)
-	l.Debugw("--topic-prefix", "AwsSnsTopicPrefix", AwsSnsTopicPrefix)
-	l.Debugw("--delete", "delete", rootArgs.enableDelete)
-	l.Debugw("--no-header", "no-header", rootArgs.noHeader)
+	log.Debugw("--check-tag-name-update-date", "CheckTagNameUpdateDate", CheckTagNameUpdateDate)
+	log.Debugw("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
+	log.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
+	log.Debugw("--max-topics", "AwsSnsMaxTopic", AwsSnsMaxTopic)
+	log.Debugw("--topic-prefix", "AwsSnsTopicPrefix", AwsSnsTopicPrefix)
+	log.Debugw("--delete", "delete", rootArgs.enableDelete)
+	log.Debugw("--no-header", "no-header", rootArgs.noHeader)
 	if rootArgs.excludePatten != nil {
-		l.Debugw("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
+		log.Debugw("--exclude-patten", "AwsSnsTopicPrefix", rootArgs.excludePatten.String())
 	}
 }
 
@@ -103,10 +104,8 @@ func runCommand(cmd *cobra.Command, cmdLineArgs []string) {
 			table.SetHeader([]string{"Topic", "Message"})
 		}
 		topics = awsSNSDelete(topics)
-	} else {
-		if !rootArgs.noHeader {
-			table.SetHeader([]string{"Topic"})
-		}
+	} else if !rootArgs.noHeader {
+		table.SetHeader([]string{"Topic"})
 	}
 
 	for _, topic := range topics {
@@ -127,16 +126,16 @@ func runCommand(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSNSToClean() map[string][]string {
-	l.Debug("AWS: init sns session")
+	log.Debug("AWS: init sns session")
 	snsSvc = sns.New(helpers.GetAwsSession(AwsSnsEndpoint))
 
 	var nextToken *string
 	var topics []*sns.Topic
-	m := make(map[string][]string)
+	snsToClean := make(map[string][]string)
 	for {
 		topicsReq, err := snsSvc.ListTopics(&sns.ListTopicsInput{NextToken: nextToken})
 		if err != nil {
-			l.Fatal(err)
+			log.Fatal(err)
 		}
 		topics = append(topics, topicsReq.Topics...)
 		if topicsReq.NextToken != nil {
@@ -154,7 +153,7 @@ func awsSNSToClean() map[string][]string {
 		for _, topic := range topics {
 			if topic.TopicArn != nil {
 				if regexp.MustCompile(`^` + AwsSnsTopicPrefix).MatchString(*snsTopicARNToTopicName(topic.TopicArn)) {
-					l.Debug("SNS: match prefix (", *topic.TopicArn, ")")
+					log.Debug("SNS: match prefix (", *topic.TopicArn, ")")
 					_topics = append(_topics, topic)
 				}
 			}
@@ -162,82 +161,88 @@ func awsSNSToClean() map[string][]string {
 		topics = _topics
 	}
 
-	l.Debug("AWS: before truncate list topics len (", len(topics), ")")
+	log.Debug("AWS: before truncate list topics len (", len(topics), ")")
 	if AwsSnsMaxTopic < len(topics) {
 		topics = topics[:AwsSnsMaxTopic]
 	}
-	l.Debug("AWS: list topics len (", len(topics), ")")
-	var wg sync.WaitGroup
-	wg.Add(len(topics))
+	log.Debug("AWS: list topics len (", len(topics), ")")
+	var waitGrp sync.WaitGroup
+	waitGrp.Add(len(topics))
 	for _, topic := range topics {
 		go func(topicARN *string) {
 			if rootArgs.excludePatten != nil {
 				if rootArgs.excludePatten.MatchString(*snsTopicARNToTopicName(topicARN)) {
-					l.Debug("SNS: Skipping (exclude patten) " + *snsTopicARNToTopicName(topicARN))
-					wg.Done()
+					log.Debug("SNS: Skipping (exclude patten) " + *snsTopicARNToTopicName(topicARN))
+					waitGrp.Done()
 					return
 				}
 			}
 			if topicARN != nil {
-				l.Debug("SNS: ", *topicARN)
+				log.Debug("SNS: ", *topicARN)
 				topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
 				if err != nil {
-					l.Fatal(err)
+					log.Warnw("cannot get topic attributes", "err", err)
+					waitGrp.Done()
+					return
 				}
 				if CheckTagNameUpdateDate != "" {
-					l.Debug("AWS: update date tag enabled")
+					log.Debug("AWS: update date tag enabled")
 					skip, err := updateDateToDelete(topicARN)
 					if err != nil {
-						l.Warnf("cannot check tag name date update: %v", err)
+						log.Warnf("cannot check tag name date update: %v", err)
 					}
 					if skip {
-						l.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *snsTopicARNToTopicName(topicARN))
-						wg.Done()
+						log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *snsTopicARNToTopicName(topicARN))
+						waitGrp.Done()
 						return
 					}
 				}
 				topicSubscriptionsSum := 0
 				if topicAttributes != nil {
-					for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
-						// subscriptionsConfirmed
-						l.Debug("SNS: "+topicAttributesName, "/", *topicAttributesValue)
-						if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
-							l.Debug("SNS: ", *topicARN, "/", topicAttributesName, " : ", *topicAttributesValue)
-							if topicAttributesValue != nil {
-								value, err := strconv.Atoi(*topicAttributesValue)
-								if err != nil {
-									log.Fatal("cannot parse ", topicAttributesName, " value")
-								}
-								topicSubscriptionsSum += value
+					waitGrp.Done()
+					return
+				}
+				for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
+					// subscriptionsConfirmed
+					log.Debug("SNS: "+topicAttributesName, "/", *topicAttributesValue)
+					if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
+						if topicAttributesValue != nil {
+							log.Debug("SNS: ", *topicARN, "/", topicAttributesName, " : ", *topicAttributesValue)
+							value, err := strconv.Atoi(*topicAttributesValue)
+							if err != nil {
+								log.Errorf("cannot parse %s value", topicAttributesName)
+								continue
 							}
+							topicSubscriptionsSum += value
 						}
 					}
-					if topicSubscriptionsSum == subscriptionsSumZero {
-						l.Debug("SNS: ", *topicARN, " unused")
-						mux.Lock()
-						m[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
-						mux.Unlock()
-					} else {
-						l.Debug("SNS: ", *topicARN, " used")
-					}
+				}
+				if topicSubscriptionsSum == subscriptionsSumZero {
+					log.Debug("SNS: ", *topicARN, " unused")
+					mux.Lock()
+					snsToClean[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
+					mux.Unlock()
+				} else {
+					log.Debug("SNS: ", *topicARN, " used")
 				}
 			}
-			wg.Done()
+			waitGrp.Done()
 		}(topic.TopicArn)
 	}
-	wg.Wait()
-	return m
+	waitGrp.Wait()
+	return snsToClean
 }
+
 func snsTopicARNToTopicName(topicARN *string) *string {
 	split := strings.Split(*topicARN, ":")
 	return &split[len(split)-1]
 }
 
-// return true if topic should be skipped
+// return true if topic should be skipped.
 func updateDateToDelete(topicArn *string) (bool, error) {
 	snsTags, err := snsSvc.ListTagsForResource(&sns.ListTagsForResourceInput{ResourceArn: topicArn})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("cannot list tags for ressource '%s' : %w", *topicArn, err)
 	}
 	for _, tag := range snsTags.Tags {
 		if tag.Key != nil && *tag.Key == CheckTagNameUpdateDate {
@@ -246,32 +251,30 @@ func updateDateToDelete(topicArn *string) (bool, error) {
 			}
 			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *tag.Value)
 			if err != nil {
-				return false, err
+				return false, fmt.Errorf("cannot parse datetime tags '%s' : %w", *tag.Value, err)
 			}
 			if dataTime.After(*rootArgs.UnusedSinceDate) {
-				l.Infow("topic is not old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
-
+				log.Infow("topic is not old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
 				return true, nil
-			} else {
-				l.Infow("topic is old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
-				return false, nil
 			}
+			log.Infow("topic is old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+			return false, nil
 		}
 	}
-	return false, err
+	return false, nil
 }
 
 func awsSNSDelete(topics map[string][]string) map[string][]string {
-	m := make(map[string][]string)
+	snsToDelete := make(map[string][]string)
 	for topicARN := range topics {
-		l.Debug("SNS: delete ", topicARN)
+		log.Debug("SNS: delete ", topicARN)
 		_, err := snsSvc.DeleteTopic(&sns.DeleteTopicInput{TopicArn: &topicARN})
-		m[topicARN] = []string{*snsTopicARNToTopicName(&topicARN), func(err error) string {
+		snsToDelete[topicARN] = []string{*snsTopicARNToTopicName(&topicARN), func(err error) string {
 			if err != nil {
 				return err.Error()
 			}
 			return "OK"
 		}(err)}
 	}
-	return m
+	return snsToDelete
 }

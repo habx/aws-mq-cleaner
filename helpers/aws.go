@@ -1,6 +1,8 @@
 package helpers
 
 import (
+	"fmt"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -18,7 +20,11 @@ func GetAwsSession(endpoint string) *session.Session {
 					URL: endpoint,
 				}, nil
 			}
-			return defaultResolver.EndpointFor(service, region, optFns...)
+			resolver, err := defaultResolver.EndpointFor(service, region, optFns...)
+			if err != nil {
+				return resolver, fmt.Errorf("get aws session: %w", err)
+			}
+			return resolver, nil
 		}
 		config.EndpointResolver = endpoints.ResolverFunc(s3CustResolverFn)
 	}

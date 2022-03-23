@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/habx/aws-mq-cleaner/commands"
 	"log"
 
+	"github.com/habx/aws-mq-cleaner/commands"
 	"github.com/spf13/cobra/doc"
 )
 

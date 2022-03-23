@@ -1,6 +1,6 @@
 module github.com/habx/aws-mq-cleaner
 
-go 1.15
+go 1.16
 
 require (
 	github.com/aws/aws-sdk-go v1.43.17
