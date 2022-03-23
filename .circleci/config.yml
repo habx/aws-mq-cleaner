@@ -72,6 +72,7 @@ workflows:
   release:
     jobs:
       - go/build:
+          context: go_public
           github-config-private-package: false
           dry-run-release: false
           filters:
