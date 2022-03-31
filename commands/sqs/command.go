@@ -50,7 +50,7 @@ func init() {
 	Command.Flags().StringVarP(&UnusedSince, "since", "", "7d", "Filter with keyword since=2h")
 }
 
-func printResult(cmd *cobra.Command, cmdLineArgs []string) {
+func printResult(_ *cobra.Command, _ []string) {
 	queues := awsSQSToClean()
 
 	table := tablewriter.NewWriter(os.Stdout)
@@ -83,18 +83,18 @@ func printResult(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSQSToClean() map[string][]string {
-	log.Debug("AWS: init sqs session")
+	log.Debug("Initialzing SQS session")
 	sqsSvc = sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
 
-	log.Debug("AWS: init cloudwatch session")
+	log.Debug("Initializing Cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
 	now := time.Now()
-	log.Debug("AWS: list queues")
+	log.Debug("Listing queues")
 	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Debugf("AWS: queues number %d", len(listQueues.QueueUrls))
+	log.Debugw("Queues fetched", "queuesNb", len(listQueues.QueueUrls))
 	sqsToClean := make(map[string][]string)
 
 	var waitGrp sync.WaitGroup
@@ -102,23 +102,24 @@ func awsSQSToClean() map[string][]string {
 
 	for _, queueURL := range listQueues.QueueUrls {
 		go func(qURL *string) {
+			queueName := *sqsQueueURLToQueueName(qURL)
+			qLog := log.With("queueName", queueName)
+			defer waitGrp.Done()
 			if qURL != nil {
 				if rootArgs.excludePatten != nil {
-					if rootArgs.excludePatten.MatchString(*sqsQueueURLToQueueName(qURL)) {
-						log.Debug("SQS: Skipping (exclude patten) " + *sqsQueueURLToQueueName(qURL))
-						waitGrp.Done()
+					if rootArgs.excludePatten.MatchString(queueName) {
+						qLog.Debugw("Skipping queue due to exclude pattern ")
 						return
 					}
 				}
 				if CheckTagNameUpdateDate != "" {
-					log.Debug("AWS: update date tag enabled")
+					qLog.Debug("Updating SNS usage date tag")
 					skip, err := updateDateToDelete(qURL)
 					if err != nil {
-						log.Warnf("cannot check tag name date update: %v", err)
+						log.Warnw("Cannot check tag name date update", "err", err)
 					}
 					if skip {
 						log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(qURL))
-						waitGrp.Done()
 						return
 					}
 				}
@@ -130,29 +131,34 @@ func awsSQSToClean() map[string][]string {
 				failed := false
 				for _, result := range metrics.MetricDataResults {
 					if len(result.Values) != 0 {
-						for _, value := range result.Values {
-							log.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") Value : ", *value)
+						for k, value := range result.Values {
+							qLog.Debugw(
+								"Metric fetched",
+								"metricLabel", *result.Label,
+								"metricValue", *value,
+								"metricDate", *result.Timestamps[k],
+							)
 							metricsSum += *value
 						}
 					} else {
-						log.Debug("SQS: ("+*sqsQueueURLToQueueName(qURL)+"/"+*result.Label+") No value : ", *result.Label)
+						qLog.Debugw("No metric value", "metricLabel", *result.Label)
 						failed = true
 					}
 				}
 				if !failed {
+					qLog = qLog.With("metricsSum", metricsSum)
 					if metricsSum == metricSumZero {
-						log.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is unused (metricsSum=", metricsSum, ")")
+						qLog.Debug("Queue is unused")
 						mux.Lock()
-						sqsToClean[*qURL] = []string{*sqsQueueURLToQueueName(qURL)}
+						sqsToClean[*qURL] = []string{queueName}
 						mux.Unlock()
 					} else {
-						log.Debug("SQS: "+*sqsQueueURLToQueueName(qURL)+" is used (metricsSum=", metricsSum, ")")
+						qLog.Debug("Queue is used")
 					}
 				} else {
-					log.Debug("SQS: " + *sqsQueueURLToQueueName(qURL) + " failed, invalid metric")
+					qLog.Debug("Invalid metrics")
 				}
 			}
-			waitGrp.Done()
 		}(queueURL)
 	}
 	waitGrp.Wait()
@@ -186,8 +192,8 @@ func defaultAwsSQSArguments() rootArguments {
 	}
 }
 
-func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	log = logger.GetLogger(flags.LogLevel).Sugar()
+func validation(_ *cobra.Command, _ []string) {
+	log = logger.GetLogger(flags.LogLevel).Sugar().With("command", "sqs")
 	rootArgs = defaultAwsSQSArguments()
 	log.Debugw("--since", "sinceParsed", *rootArgs.UnusedSinceDate, "since", rootArgs.UnusedSince)
 	log.Debugw("--queue-prefix", "AwsSQSQueuePrefix", AwsSQSQueuePrefix)
@@ -269,7 +275,7 @@ func updateDateToDelete(queueURL *string) (bool, error) {
 			if value == nil {
 				return false, nil
 			}
-			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *value)
+			dataTime, err := time.Parse(time.RFC3339, *value)
 			if err != nil {
 				return false, fmt.Errorf("cannot parse datetime tags '%s' : %w", *value, err)
 			}
@@ -287,7 +293,7 @@ func updateDateToDelete(queueURL *string) (bool, error) {
 func awsSQSDelete(queues map[string][]string) map[string][]string {
 	sqsToDelete := make(map[string][]string)
 	for queue := range queues {
-		log.Debug("SQS: delete ", queue)
+		log.Debugw("Deleting queue ", "queuName", queue)
 		_, err := sqsSvc.DeleteQueue(&sqs.DeleteQueueInput{QueueUrl: &queue})
 		sqsToDelete[queue] = []string{*sqsQueueURLToQueueName(&queue), func(err error) string {
 			if err != nil {
