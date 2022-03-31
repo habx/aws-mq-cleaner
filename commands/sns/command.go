@@ -230,12 +230,12 @@ func awsSNSToClean() map[string][]string {
 				}
 			}
 			if topicSubscriptionsSum == subscriptionsSumZero {
-				log.Debug("SNS: ", *topicARN, " unused")
+				tLog.Debug("Topic unused")
 				mux.Lock()
 				snsToClean[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
 				mux.Unlock()
 			} else {
-				log.Debug("SNS: ", *topicARN, " used")
+				tLog.Debug("Topic used")
 			}
 
 		}(topic.TopicArn)
