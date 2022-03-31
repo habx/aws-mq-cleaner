@@ -189,11 +189,11 @@ func awsSNSToClean() map[string][]string {
 			tLog.Debugw("Getting topic attributes", "topicName", topicName)
 			topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
 			if err != nil {
-				log.Warnw("cannot get topic attributes", "err", err)
+				log.Warnw("Cannot get topic attributes", "err", err)
 				return
 			}
 			if CheckTagNameUpdateDate != "" {
-				tLog.Debug("AWS: update date tag enabled")
+				tLog.Debug("Update date tag enabled")
 				skip, err := updateDateToDelete(topicARN)
 				if err != nil {
 					log.Warnw("Cannot check tag name date update", "err", err)
@@ -232,7 +232,7 @@ func awsSNSToClean() map[string][]string {
 			if topicSubscriptionsSum == subscriptionsSumZero {
 				tLog.Debug("Topic unused")
 				mux.Lock()
-				snsToClean[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
+				snsToClean[*topicARN] = []string{topicName}
 				mux.Unlock()
 			} else {
 				tLog.Debug("Topic used")
@@ -251,6 +251,7 @@ func snsTopicARNToTopicName(topicARN *string) *string {
 
 // return true if topic should be skipped.
 func updateDateToDelete(topicArn *string) (bool, error) {
+	topicName := *snsTopicARNToTopicName(topicArn)
 	snsTags, err := snsSvc.ListTagsForResource(&sns.ListTagsForResourceInput{ResourceArn: topicArn})
 	if err != nil {
 		return false, fmt.Errorf("cannot list tags for ressource '%s' : %w", *topicArn, err)
@@ -265,10 +266,10 @@ func updateDateToDelete(topicArn *string) (bool, error) {
 				return false, fmt.Errorf("cannot parse datetime tags '%s' : %w", *tag.Value, err)
 			}
 			if dataTime.After(*rootArgs.UnusedSinceDate) {
-				log.Infow("topic is not old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+				log.Infow("Topic is not old enough to delete", "topicName", topicName, "date", dataTime.String())
 				return true, nil
 			}
-			log.Infow("topic is old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+			log.Infow("Topic is old enough to delete", "topicName", topicName, "date", dataTime.String())
 			return false, nil
 		}
 	}
