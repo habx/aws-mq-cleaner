@@ -212,7 +212,7 @@ func awsSNSToClean() map[string][]string {
 			for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
 				// subscriptionsConfirmed
 				mLog := tLog.With("attributeName", topicAttributesName)
-				// logAttribute := log.With("attributeName")
+
 				if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
 					if topicAttributesValue != nil {
 						mLog.Debugw("Fetched attribute", "attributeValue", *topicAttributesValue)
