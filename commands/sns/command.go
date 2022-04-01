@@ -237,7 +237,6 @@ func awsSNSToClean() map[string][]string {
 			} else {
 				tLog.Debug("Topic used")
 			}
-
 		}(topic.TopicArn)
 	}
 	waitGrp.Wait()
