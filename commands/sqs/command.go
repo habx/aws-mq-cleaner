@@ -83,7 +83,7 @@ func printResult(_ *cobra.Command, _ []string) {
 }
 
 func awsSQSToClean() map[string][]string {
-	log.Debug("Initialzing SQS session")
+	log.Debug("Initializing SQS session")
 	sqsSvc = sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
 
 	log.Debug("Initializing Cloudwatch session")
