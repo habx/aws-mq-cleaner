@@ -10,7 +10,6 @@ import (
 var Logger *zap.Logger
 
 func initLogger(logLevel string) (*zap.Logger, error) {
-	// nolint:wrapcheck
 	config := zap.NewDevelopmentConfig()
 	config.Level = zap.NewAtomicLevelAt(func(level string) zapcore.Level {
 		if level == "debug" {
@@ -18,6 +17,7 @@ func initLogger(logLevel string) (*zap.Logger, error) {
 		}
 		return zap.InfoLevel
 	}(logLevel))
+	// nolint:wrapcheck
 	return config.Build()
 }
 
