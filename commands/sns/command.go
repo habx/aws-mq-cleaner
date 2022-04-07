@@ -78,8 +78,8 @@ func init() {
 	Command.Flags().IntVarP(&AwsSnsMaxTopic, "max-topics", "", maxEpic, "Get max topics (Example: 10) before filtering")
 }
 
-func validation(cmd *cobra.Command, cmdLineArgs []string) {
-	log = logger.GetLogger(flags.LogLevel).Sugar()
+func validation(_ *cobra.Command, _ []string) {
+	log = logger.GetLogger(flags.LogLevel).Sugar().With("command", "sns")
 	rootArgs = defaultArguments()
 	log.Debugw("--check-tag-name-update-date", "CheckTagNameUpdateDate", CheckTagNameUpdateDate)
 	log.Debugw("--sns-endpoint", "AwsSnsEndpoint", AwsSnsEndpoint)
@@ -93,7 +93,7 @@ func validation(cmd *cobra.Command, cmdLineArgs []string) {
 	}
 }
 
-func runCommand(cmd *cobra.Command, cmdLineArgs []string) {
+func runCommand(_ *cobra.Command, _ []string) {
 	topics := awsSNSToClean()
 
 	table := tablewriter.NewWriter(os.Stdout)
@@ -126,7 +126,7 @@ func runCommand(cmd *cobra.Command, cmdLineArgs []string) {
 }
 
 func awsSNSToClean() map[string][]string {
-	log.Debug("AWS: init sns session")
+	log.Debug("Initializing SNS session")
 	snsSvc = sns.New(helpers.GetAwsSession(AwsSnsEndpoint))
 
 	var nextToken *string
@@ -153,7 +153,7 @@ func awsSNSToClean() map[string][]string {
 		for _, topic := range topics {
 			if topic.TopicArn != nil {
 				if regexp.MustCompile(`^` + AwsSnsTopicPrefix).MatchString(*snsTopicARNToTopicName(topic.TopicArn)) {
-					log.Debug("SNS: match prefix (", *topic.TopicArn, ")")
+					log.Debugw("Matching topic prefix", "topicArn", *topic.TopicArn)
 					_topics = append(_topics, topic)
 				}
 			}
@@ -161,72 +161,82 @@ func awsSNSToClean() map[string][]string {
 		topics = _topics
 	}
 
-	log.Debug("AWS: before truncate list topics len (", len(topics), ")")
+	log.Debugw("Truncating topics list", "nbTopics", len(topics))
 	if AwsSnsMaxTopic < len(topics) {
 		topics = topics[:AwsSnsMaxTopic]
 	}
-	log.Debug("AWS: list topics len (", len(topics), ")")
+	log.Debugw("Truncated topics list", "nbTopics", len(topics))
 	var waitGrp sync.WaitGroup
 	waitGrp.Add(len(topics))
 	for _, topic := range topics {
 		go func(topicARN *string) {
+			defer waitGrp.Done()
+
+			topicName := *snsTopicARNToTopicName(topicARN)
+			tLog := log.With("topicName", topicName)
+
 			if rootArgs.excludePatten != nil {
-				if rootArgs.excludePatten.MatchString(*snsTopicARNToTopicName(topicARN)) {
-					log.Debug("SNS: Skipping (exclude patten) " + *snsTopicARNToTopicName(topicARN))
-					waitGrp.Done()
+				if rootArgs.excludePatten.MatchString(topicName) {
+					tLog.Debug("Skipping topic because of excludePattern", "excludePattern", rootArgs.excludePatten.String())
 					return
 				}
 			}
-			if topicARN != nil {
-				log.Debug("SNS: ", *topicARN)
-				topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
+
+			if topicARN == nil { // <-- I don't think this make any sense
+				tLog.Debug("Skipping topic because of nil topicARN")
+				return
+			}
+			tLog.Debugw("Getting topic attributes", "topicName", topicName)
+			topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
+			if err != nil {
+				log.Warnw("Cannot get topic attributes", "err", err)
+				return
+			}
+			if CheckTagNameUpdateDate != "" {
+				tLog.Debug("Update date tag enabled")
+				skip, err := updateDateToDelete(topicARN)
 				if err != nil {
-					log.Warnw("cannot get topic attributes", "err", err)
-					waitGrp.Done()
+					log.Warnw("Cannot check tag name date update", "err", err)
+				}
+				if skip {
+					log.Infow("Skipping queue because of last update tag",
+						"tagName", CheckTagNameUpdateDate,
+					)
 					return
-				}
-				if CheckTagNameUpdateDate != "" {
-					log.Debug("AWS: update date tag enabled")
-					skip, err := updateDateToDelete(topicARN)
-					if err != nil {
-						log.Warnf("cannot check tag name date update: %v", err)
-					}
-					if skip {
-						log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *snsTopicARNToTopicName(topicARN))
-						waitGrp.Done()
-						return
-					}
-				}
-				topicSubscriptionsSum := 0
-				if topicAttributes != nil {
-					waitGrp.Done()
-					return
-				}
-				for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
-					// subscriptionsConfirmed
-					log.Debug("SNS: "+topicAttributesName, "/", *topicAttributesValue)
-					if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
-						if topicAttributesValue != nil {
-							log.Debug("SNS: ", *topicARN, "/", topicAttributesName, " : ", *topicAttributesValue)
-							value, err := strconv.Atoi(*topicAttributesValue)
-							if err != nil {
-								log.Errorf("cannot parse %s value", topicAttributesName)
-								continue
-							}
-							topicSubscriptionsSum += value
-						}
-					}
-				}
-				if topicSubscriptionsSum == subscriptionsSumZero {
-					log.Debug("SNS: ", *topicARN, " unused")
-					mux.Lock()
-					snsToClean[*topicARN] = []string{*snsTopicARNToTopicName(topicARN)}
-					mux.Unlock()
-				} else {
-					log.Debug("SNS: ", *topicARN, " used")
 				}
 			}
-			waitGrp.Done()
+			topicSubscriptionsSum := 0
+			if topicAttributes == nil {
+				return
+			}
+			for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
+				// subscriptionsConfirmed
+				mLog := tLog.With("attributeName", topicAttributesName)
+
+				if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
+					if topicAttributesValue != nil {
+						mLog.Debugw("Fetched attribute", "attributeValue", *topicAttributesValue)
+						value, err := strconv.Atoi(*topicAttributesValue)
+						if err != nil {
+							mLog.Errorw(
+								"cannot parse value",
+								"err", err,
+								"value", *topicAttributesValue,
+							)
+							continue
+						}
+						topicSubscriptionsSum += value
+					}
+				}
+			}
+			if topicSubscriptionsSum == subscriptionsSumZero {
+				tLog.Debug("Topic unused")
+				mux.Lock()
+				snsToClean[*topicARN] = []string{topicName}
+				mux.Unlock()
+			} else {
+				tLog.Debug("Topic used")
+			}
 		}(topic.TopicArn)
 	}
 	waitGrp.Wait()
@@ -240,6 +250,7 @@ func snsTopicARNToTopicName(topicARN *string) *string {
 
 // return true if topic should be skipped.
 func updateDateToDelete(topicArn *string) (bool, error) {
+	topicName := *snsTopicARNToTopicName(topicArn)
 	snsTags, err := snsSvc.ListTagsForResource(&sns.ListTagsForResourceInput{ResourceArn: topicArn})
 	if err != nil {
 		return false, fmt.Errorf("cannot list tags for ressource '%s' : %w", *topicArn, err)
@@ -249,15 +260,15 @@ func updateDateToDelete(topicArn *string) (bool, error) {
 			if tag.Value == nil {
 				return false, nil
 			}
-			dataTime, err := time.Parse("2006-01-02T15:04:05.000-03:00", *tag.Value)
+			dataTime, err := time.Parse(time.RFC3339, *tag.Value)
 			if err != nil {
 				return false, fmt.Errorf("cannot parse datetime tags '%s' : %w", *tag.Value, err)
 			}
 			if dataTime.After(*rootArgs.UnusedSinceDate) {
-				log.Infow("topic is not old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+				log.Infow("Topic is not old enough to delete", "topicName", topicName, "date", dataTime.String())
 				return true, nil
 			}
-			log.Infow("topic is old enough to delete", "topicArn", *topicArn, "date", dataTime.String())
+			log.Infow("Topic is old enough to delete", "topicName", topicName, "date", dataTime.String())
 			return false, nil
 		}
 	}
@@ -267,7 +278,7 @@ func updateDateToDelete(topicArn *string) (bool, error) {
 func awsSNSDelete(topics map[string][]string) map[string][]string {
 	snsToDelete := make(map[string][]string)
 	for topicARN := range topics {
-		log.Debug("SNS: delete ", topicARN)
+		log.Debugw("Deleting topic", "topicARN", topicARN)
 		_, err := snsSvc.DeleteTopic(&sns.DeleteTopicInput{TopicArn: &topicARN})
 		snsToDelete[topicARN] = []string{*snsTopicARNToTopicName(&topicARN), func(err error) string {
 			if err != nil {
