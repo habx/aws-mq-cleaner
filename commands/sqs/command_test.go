@@ -1,7 +1,9 @@
 package sqs_test
 
 import (
+	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,9 @@ func Test_SQS(t *testing.T) {
 	queue := CreateQueue(sqsLocalStack)
 	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
 	queue = CreateQueueWithOldDate(sqsLocalStack)
+	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
+	// DLQ
+	queue = CreateQueueWithOldDateAndDlq(sqsLocalStack)
 	CreateMetrics(cloudWatchLocalStack, queue.QueueUrl)
 	Convey("sqs: std cmd ", t, func() {
 		args := []string{"--loglevel=debug", "sqs", "--sqs-endpoint=" + sqsLocalStack, "--cloudwatch-endpoint=" + cloudWatchLocalStack}
@@ -95,6 +100,50 @@ func CreateQueueWithOldDate(endpoint string) *sqs.CreateQueueOutput {
 			"update_date": aws.String("2020-01-02T15:04:05.000-03:00"),
 		},
 	})
+	if err != nil {
+		panic(err)
+	}
+	return queueOutput
+}
+
+func CreateQueueWithOldDateAndDlq(endpoint string) *sqs.CreateQueueOutput {
+	uniqueDate := strconv.Itoa(int(time.Now().Unix()))
+	sqsSvc := sqs.New(helpers.GetAwsSession(endpoint))
+
+	dlq, err := sqsSvc.CreateQueue(&sqs.CreateQueueInput{
+		QueueName: aws.String("testing-" + uniqueDate + "-dlq"),
+		Tags: map[string]*string{
+			"update_date": aws.String("2020-01-02T15:04:05.000-03:00"),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	queueURL := dlq.QueueUrl
+	parts := strings.Split(*queueURL, "/")
+	//arn:aws:sqs:us-east-1:000000000000
+	arn := "arn:aws:sqs:eu-west-1:" + parts[3] + ":" + parts[4]
+	policyData := map[string]string{
+		"deadLetterTargetArn": arn,
+		"maxReceiveCount":     "10",
+	}
+	policyDataJSON, err := json.Marshal(policyData)
+	if err != nil {
+		panic(err)
+	}
+	queueOutput, err := sqsSvc.CreateQueue(&sqs.CreateQueueInput{
+		QueueName: aws.String("testing-" + uniqueDate),
+	})
+	if err != nil {
+		panic(err)
+	}
+	_, err = sqsSvc.SetQueueAttributes(&sqs.SetQueueAttributesInput{
+		QueueUrl: queueOutput.QueueUrl,
+		Attributes: map[string]*string{
+			sqs.QueueAttributeNameRedrivePolicy: aws.String(string(policyDataJSON)),
+		},
+	})
+
 	if err != nil {
 		panic(err)
 	}

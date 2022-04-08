@@ -42,6 +42,11 @@ var (
 	sqsSvc   *sqs.SQS
 )
 
+type QueuesToDelete struct {
+	Queues map[string]string
+	Dlq    map[string][]string
+}
+
 func init() {
 	Command.Flags().StringVarP(&AwsSqsEndpoint, "sqs-endpoint", "", "", "SQS endpoint")
 	Command.Flags().StringVarP(&AwsCloudWatchEndpoint, "cloudwatch-endpoint", "", "", "CloudWatch endpoint")
@@ -100,32 +105,53 @@ func awsSQSToClean() map[string][]string {
 	waitGrp := &sync.WaitGroup{}
 	waitGrp.Add(len(listQueues.QueueUrls))
 	limiter := make(chan bool, maxProcessingWorkers)
-	sqsToCleanChannel := make([]chan map[string][]string, len(listQueues.QueueUrls))
+	sqsToCleanChannel := make([]chan QueuesToDelete, len(listQueues.QueueUrls))
 
 	for i, queueURL := range listQueues.QueueUrls {
-		sqsToCleanChannel[i] = make(chan map[string][]string, 1)
-		go processing(limiter, sqsToCleanChannel[i], waitGrp, cwSvc, queueURL)
+		sqsToCleanChannel[i] = make(chan QueuesToDelete, 1)
+		go processing(limiter, sqsToCleanChannel[i], waitGrp, cwSvc, sqsSvc, queueURL)
 	}
 	waitGrp.Wait()
+	var queuesToCleanToMerge []QueuesToDelete
 	for i := 0; i < len(listQueues.QueueUrls); i++ {
-		for k, v := range <-sqsToCleanChannel[i] {
-			sqsToClean[k] = v
+		queuesToClean := <-sqsToCleanChannel[i]
+		queuesToCleanToMerge = append(queuesToCleanToMerge, queuesToClean)
+	}
+	queuesToCleanToMerged := QueuesToDelete{
+		Queues: make(map[string]string),
+		Dlq:    make(map[string][]string),
+	}
+	for _, queues := range queuesToCleanToMerge {
+		for k, v := range queues.Dlq {
+			queuesToCleanToMerged.Dlq[k] = v
+		}
+		for k, v := range queues.Queues {
+			queuesToCleanToMerged.Queues[k] = v
 		}
 	}
-
+	for url, queueName := range queuesToCleanToMerged.Queues {
+		sqsToClean[url] = append(sqsToClean[url], queueName)
+		for _, dlq := range queuesToCleanToMerged.Dlq[url] {
+			sqsToClean[dlq] = append(sqsToClean[dlq], *sqsQueueURLToQueueName(&dlq))
+		}
+	}
 	return sqsToClean
 }
 
-func processing(limiter chan bool, sqsToClean chan map[string][]string, group *sync.WaitGroup, cwSvc *cloudwatch.CloudWatch, queueURL *string) {
+func processing(limiter chan bool, sqsToClean chan QueuesToDelete, group *sync.WaitGroup, cwSvc *cloudwatch.CloudWatch, sqsSvc *sqs.SQS, queueURL *string) {
 	now := time.Now()
 	queueName := *sqsQueueURLToQueueName(queueURL)
 	tLog := log.With("queueName", queueName)
 	tLog.Debugw("start processing", "queueName", queueName)
-	_sqsToClean := make(map[string][]string)
+	_sqsToClean := make(map[string]string)
+	_sqsDlqToClean := make(map[string][]string)
 	limiter <- true
 	defer func() {
 		<-limiter
-		sqsToClean <- _sqsToClean
+		sqsToClean <- QueuesToDelete{
+			Queues: _sqsToClean,
+			Dlq:    _sqsDlqToClean,
+		}
 		group.Done()
 		tLog.Debugw("stop processing", "queueName", queueName)
 	}()
@@ -170,11 +196,26 @@ func processing(limiter chan bool, sqsToClean chan map[string][]string, group *s
 				failed = true
 			}
 		}
-		if !failed {
+		isDld := false
+		dql, err := sqsSvc.ListDeadLetterSourceQueues(&sqs.ListDeadLetterSourceQueuesInput{QueueUrl: queueURL})
+		if err != nil {
+			tLog.Warnw("cannot determine if is dql", "queueName", queueName, "err", err)
+		} else {
+			if len(dql.QueueUrls) != 0 {
+				tLog.Debugw("is dead letter queue candidate", "queueName", queueName, "dlq", dql.QueueUrls)
+				isDld = true
+				for _, dlq := range dql.QueueUrls {
+					_sqsDlqToClean[*dlq] = append(_sqsDlqToClean[*dlq], *queueURL)
+				}
+			} else {
+				tLog.Debugw("is dead letter queue without queue", "queueName", queueName, "dlq", dql.QueueUrls)
+			}
+		}
+		if !failed && !isDld {
 			tLog = tLog.With("metricsSum", metricsSum)
 			if metricsSum == metricSumZero {
-				tLog.Debug("Queue is unused")
-				_sqsToClean[*queueURL] = []string{queueName}
+				tLog.Debugw("Queue is unused", "queueName", queueName)
+				_sqsToClean[*queueURL] = queueName
 			} else {
 				tLog.Debug("Queue is used")
 			}
