@@ -10,33 +10,15 @@ import (
 var Logger *zap.Logger
 
 func initLogger(logLevel string) (*zap.Logger, error) {
+	config := zap.NewDevelopmentConfig()
+	config.Level = zap.NewAtomicLevelAt(func(level string) zapcore.Level {
+		if level == "debug" {
+			return zap.DebugLevel
+		}
+		return zap.InfoLevel
+	}(logLevel))
 	// nolint:wrapcheck
-	return zap.Config{
-		Level: zap.NewAtomicLevelAt(func(level string) zapcore.Level {
-			if level == "debug" {
-				return zap.DebugLevel
-			}
-			return zap.InfoLevel
-		}(logLevel)),
-		Encoding:    "console",
-		OutputPaths: []string{"stdout"},
-		EncoderConfig: func(level string) zapcore.EncoderConfig {
-			if level == "debug" {
-				return zapcore.EncoderConfig{
-					MessageKey:   "message", // <---
-					LevelKey:     "level",
-					EncodeLevel:  zapcore.CapitalLevelEncoder,
-					TimeKey:      "time",
-					EncodeTime:   zapcore.ISO8601TimeEncoder,
-					CallerKey:    "caller",
-					EncodeCaller: zapcore.ShortCallerEncoder,
-				}
-			}
-			return zapcore.EncoderConfig{
-				MessageKey: "message", // <---
-			}
-		}(logLevel),
-	}.Build()
+	return config.Build()
 }
 
 // GetLogger returns a named logger.
