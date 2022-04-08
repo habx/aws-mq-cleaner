@@ -9,20 +9,20 @@
 
 ## About
 
-`aws-mq-cleaner` is a tool to remove sqs queues and sns topics that are no more used.
+`aws-mq-cleaner` is a tool to remove unused SQS queues and SNS topics.
 
-**Deletion method** : 
+### Deletion method
 
-* SQS
+#### SQS
 
-I'm getting the metrics from cloudwatch.
-If `NumberOfMessagesReceived` and `NumberOfEmptyReceipts` are at zero I consider the queue to not be used anymore.
+We're getting the metrics from Cloudwatch.
+If `NumberOfMessagesReceived` and `NumberOfEmptyReceipts` are set to zero, we're considering the queue to be unused.
 
-* SNS
+#### SNS
 
-If `subscriptionsConfirmed` and `subscriptionsPending` are at zero I consider the topic to be more used.
+If `subscriptionsConfirmed` and `subscriptionsPending` are at zero, we're considering the topic to be unused.
 
-> **_NOTE:_** You can add a tag to read an "update date" to define if you should delete the topic or the queue. This tag is configurable, you can define it via the [Docs](docs/aws-mq-cleaner.md)
+> **_NOTE:_** You can add a tag to read an "update date" to prevent a topic without subscriptions to be deleted. The tag name is configurable, you can define it via the [Docs](docs/aws-mq-cleaner.md). The tag format shall be in [ISO-8601](https://en.wikipedia.org/wiki/ISO_8601).
 
 
 ## Install
