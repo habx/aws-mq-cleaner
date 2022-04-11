@@ -24,6 +24,7 @@ import (
 const (
 	metricSumZero             = 0
 	maxCloudWatchMaxDatapoint = 100
+	maxProcessingWorkers      = 5
 )
 
 var (
@@ -39,7 +40,6 @@ var (
 	log      *zap.SugaredLogger
 	rootArgs rootArguments
 	sqsSvc   *sqs.SQS
-	mux      sync.RWMutex
 )
 
 func init() {
@@ -88,7 +88,7 @@ func awsSQSToClean() map[string][]string {
 
 	log.Debug("Initializing Cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
-	now := time.Now()
+
 	log.Debug("Listing queues")
 	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
@@ -97,72 +97,91 @@ func awsSQSToClean() map[string][]string {
 	log.Debugw("Queues fetched", "queuesNb", len(listQueues.QueueUrls))
 	sqsToClean := make(map[string][]string)
 
-	var waitGrp sync.WaitGroup
+	waitGrp := &sync.WaitGroup{}
 	waitGrp.Add(len(listQueues.QueueUrls))
+	limiter := make(chan bool, maxProcessingWorkers)
+	sqsToCleanChannel := make([]chan map[string][]string, len(listQueues.QueueUrls))
 
-	for _, queueURL := range listQueues.QueueUrls {
-		go func(qURL *string) {
-			queueName := *sqsQueueURLToQueueName(qURL)
-			qLog := log.With("queueName", queueName)
-			defer waitGrp.Done()
-			if qURL != nil {
-				if rootArgs.excludePatten != nil {
-					if rootArgs.excludePatten.MatchString(queueName) {
-						qLog.Debugw("Skipping queue due to exclude pattern ")
-						return
-					}
-				}
-				if CheckTagNameUpdateDate != "" {
-					qLog.Debug("Updating SNS usage date tag")
-					skip, err := updateDateToDelete(qURL)
-					if err != nil {
-						log.Warnw("Cannot check tag name date update", "err", err)
-					}
-					if skip {
-						log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(qURL))
-						return
-					}
-				}
-				metrics, err := cwSvc.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, &now, qURL))
-				if err != nil {
-					log.Fatal(err)
-				}
-				metricsSum := 0.0
-				failed := false
-				for _, result := range metrics.MetricDataResults {
-					if len(result.Values) != 0 {
-						for k, value := range result.Values {
-							qLog.Debugw(
-								"Metric fetched",
-								"metricLabel", *result.Label,
-								"metricValue", *value,
-								"metricDate", *result.Timestamps[k],
-							)
-							metricsSum += *value
-						}
-					} else {
-						qLog.Debugw("No metric value", "metricLabel", *result.Label)
-						failed = true
-					}
-				}
-				if !failed {
-					qLog = qLog.With("metricsSum", metricsSum)
-					if metricsSum == metricSumZero {
-						qLog.Debug("Queue is unused")
-						mux.Lock()
-						sqsToClean[*qURL] = []string{queueName}
-						mux.Unlock()
-					} else {
-						qLog.Debug("Queue is used")
-					}
-				} else {
-					qLog.Debug("Invalid metrics")
-				}
-			}
-		}(queueURL)
+	for i, queueURL := range listQueues.QueueUrls {
+		sqsToCleanChannel[i] = make(chan map[string][]string, 1)
+		go processing(limiter, sqsToCleanChannel[i], waitGrp, cwSvc, queueURL)
 	}
 	waitGrp.Wait()
+	for i := 0; i < len(listQueues.QueueUrls); i++ {
+		for k, v := range <-sqsToCleanChannel[i] {
+			sqsToClean[k] = v
+		}
+	}
+
 	return sqsToClean
+}
+
+func processing(limiter chan bool, sqsToClean chan map[string][]string, group *sync.WaitGroup, cwSvc *cloudwatch.CloudWatch, queueURL *string) {
+	now := time.Now()
+	queueName := *sqsQueueURLToQueueName(queueURL)
+	tLog := log.With("queueName", queueName)
+	tLog.Debugw("start processing", "queueName", queueName)
+	_sqsToClean := make(map[string][]string)
+	limiter <- true
+	defer func() {
+		<-limiter
+		sqsToClean <- _sqsToClean
+		group.Done()
+		tLog.Debugw("stop processing", "queueName", queueName)
+	}()
+
+	if queueURL != nil {
+		if rootArgs.excludePatten != nil {
+			if rootArgs.excludePatten.MatchString(queueName) {
+				tLog.Debugw("Skipping queue due to exclude pattern ")
+				return
+			}
+		}
+		if CheckTagNameUpdateDate != "" {
+			tLog.Debug("Updating SNS usage date tag")
+			skip, err := updateDateToDelete(queueURL)
+			if err != nil {
+				log.Warnw("Cannot check tag name date update", "err", err)
+			}
+			if skip {
+				log.Infof("SQS: Skipping (tag name %s): %s", CheckTagNameUpdateDate, *sqsQueueURLToQueueName(queueURL))
+				return
+			}
+		}
+		metrics, err := cwSvc.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, &now, queueURL))
+		if err != nil {
+			log.Fatal(err)
+		}
+		metricsSum := 0.0
+		failed := false
+		for _, result := range metrics.MetricDataResults {
+			if len(result.Values) != 0 {
+				for k, value := range result.Values {
+					tLog.Debugw(
+						"Metric fetched",
+						"metricLabel", *result.Label,
+						"metricValue", *value,
+						"metricDate", *result.Timestamps[k],
+					)
+					metricsSum += *value
+				}
+			} else {
+				tLog.Debugw("No metric value", "metricLabel", *result.Label)
+				failed = true
+			}
+		}
+		if !failed {
+			tLog = tLog.With("metricsSum", metricsSum)
+			if metricsSum == metricSumZero {
+				tLog.Debug("Queue is unused")
+				_sqsToClean[*queueURL] = []string{queueName}
+			} else {
+				tLog.Debug("Queue is used")
+			}
+		} else {
+			tLog.Debug("Invalid metrics")
+		}
+	}
 }
 
 type rootArguments struct {

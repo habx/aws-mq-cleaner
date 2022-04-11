@@ -25,6 +25,7 @@ const (
 	subscriptionsConfirmed = "SubscriptionsConfirmed"
 	subscriptionsSumZero   = 0
 	maxEpic                = 100
+	maxProcessingWorkers   = 5
 )
 
 var (
@@ -40,7 +41,6 @@ var (
 	log      *zap.SugaredLogger
 	rootArgs rootArguments
 	snsSvc   *sns.SNS
-	mux      sync.RWMutex
 )
 
 type rootArguments struct {
@@ -166,81 +166,96 @@ func awsSNSToClean() map[string][]string {
 		topics = topics[:AwsSnsMaxTopic]
 	}
 	log.Debugw("Truncated topics list", "nbTopics", len(topics))
-	var waitGrp sync.WaitGroup
+	waitGrp := &sync.WaitGroup{}
 	waitGrp.Add(len(topics))
-	for _, topic := range topics {
-		go func(topicARN *string) {
-			defer waitGrp.Done()
-
-			topicName := *snsTopicARNToTopicName(topicARN)
-			tLog := log.With("topicName", topicName)
-
-			if rootArgs.excludePatten != nil {
-				if rootArgs.excludePatten.MatchString(topicName) {
-					tLog.Debug("Skipping topic because of excludePattern", "excludePattern", rootArgs.excludePatten.String())
-					return
-				}
-			}
-
-			if topicARN == nil { // <-- I don't think this make any sense
-				tLog.Debug("Skipping topic because of nil topicARN")
-				return
-			}
-			tLog.Debugw("Getting topic attributes", "topicName", topicName)
-			topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
-			if err != nil {
-				log.Warnw("Cannot get topic attributes", "err", err)
-				return
-			}
-			if CheckTagNameUpdateDate != "" {
-				tLog.Debug("Update date tag enabled")
-				skip, err := updateDateToDelete(topicARN)
-				if err != nil {
-					log.Warnw("Cannot check tag name date update", "err", err)
-				}
-				if skip {
-					log.Infow("Skipping queue because of last update tag",
-						"tagName", CheckTagNameUpdateDate,
-					)
-					return
-				}
-			}
-			topicSubscriptionsSum := 0
-			if topicAttributes == nil {
-				return
-			}
-			for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
-				// subscriptionsConfirmed
-				mLog := tLog.With("attributeName", topicAttributesName)
-
-				if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
-					if topicAttributesValue != nil {
-						mLog.Debugw("Fetched attribute", "attributeValue", *topicAttributesValue)
-						value, err := strconv.Atoi(*topicAttributesValue)
-						if err != nil {
-							mLog.Errorw(
-								"cannot parse value",
-								"err", err,
-								"value", *topicAttributesValue,
-							)
-							continue
-						}
-						topicSubscriptionsSum += value
-					}
-				}
-			}
-			if topicSubscriptionsSum == subscriptionsSumZero {
-				tLog.Debug("Topic unused")
-				mux.Lock()
-				snsToClean[*topicARN] = []string{topicName}
-				mux.Unlock()
-			} else {
-				tLog.Debug("Topic used")
-			}
-		}(topic.TopicArn)
+	limiter := make(chan bool, maxProcessingWorkers)
+	snsToCleanChannel := make([]chan map[string][]string, len(topics))
+	for i, topic := range topics {
+		snsToCleanChannel[i] = make(chan map[string][]string, 1)
+		go processing(limiter, snsToCleanChannel[i], waitGrp, topic.TopicArn)
 	}
 	waitGrp.Wait()
+	for i := 0; i < len(topics); i++ {
+		for k, v := range <-snsToCleanChannel[i] {
+			snsToClean[k] = v
+		}
+	}
 	return snsToClean
+}
+
+func processing(limiter chan bool, snsToClean chan map[string][]string, group *sync.WaitGroup, topicARN *string) {
+	topicName := *snsTopicARNToTopicName(topicARN)
+	tLog := log.With("topicName", topicName)
+	tLog.Debugw("start processing", "topicName", topicName)
+	_snsToClean := make(map[string][]string)
+	limiter <- true
+	defer func() {
+		<-limiter
+		snsToClean <- _snsToClean
+		group.Done()
+		tLog.Debugw("stop processing", "topicName", topicName)
+	}()
+
+	if rootArgs.excludePatten != nil {
+		if rootArgs.excludePatten.MatchString(topicName) {
+			tLog.Debug("Skipping topic because of excludePattern", "excludePattern", rootArgs.excludePatten.String())
+			return
+		}
+	}
+
+	if topicARN == nil { // <-- I don't think this make any sense
+		tLog.Debug("Skipping topic because of nil topicARN")
+		return
+	}
+	tLog.Debugw("Getting topic attributes", "topicName", topicName)
+	topicAttributes, err := snsSvc.GetTopicAttributes(&sns.GetTopicAttributesInput{TopicArn: topicARN})
+	if err != nil {
+		log.Warnw("Cannot get topic attributes", "err", err)
+		return
+	}
+	if CheckTagNameUpdateDate != "" {
+		tLog.Debug("Update date tag enabled")
+		skip, err := updateDateToDelete(topicARN)
+		if err != nil {
+			log.Warnw("Cannot check tag name date update", "err", err)
+		}
+		if skip {
+			log.Infow("Skipping queue because of last update tag",
+				"tagName", CheckTagNameUpdateDate,
+			)
+			return
+		}
+	}
+	topicSubscriptionsSum := 0
+	if topicAttributes == nil {
+		return
+	}
+	for topicAttributesName, topicAttributesValue := range topicAttributes.Attributes {
+		// subscriptionsConfirmed
+		mLog := tLog.With("attributeName", topicAttributesName)
+
+		if topicAttributesName == subscriptionsConfirmed || topicAttributesName == subscriptionsPending {
+			if topicAttributesValue != nil {
+				mLog.Debugw("Fetched attribute", "attributeValue", *topicAttributesValue)
+				value, err := strconv.Atoi(*topicAttributesValue)
+				if err != nil {
+					mLog.Errorw(
+						"cannot parse value",
+						"err", err,
+						"value", *topicAttributesValue,
+					)
+					continue
+				}
+				topicSubscriptionsSum += value
+			}
+		}
+	}
+	if topicSubscriptionsSum == subscriptionsSumZero {
+		tLog.Debug("Topic unused")
+		_snsToClean[*topicARN] = []string{topicName}
+	} else {
+		tLog.Debug("Topic used")
+	}
 }
 
 func snsTopicARNToTopicName(topicARN *string) *string {
