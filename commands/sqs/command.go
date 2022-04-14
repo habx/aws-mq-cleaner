@@ -268,7 +268,7 @@ func (c *AWSClients) GetCloudWatchMetrics(now *time.Time, queueURL *string) (*fl
 	if err != nil {
 		return nil, fmt.Errorf("cannot get metrics: %w", err)
 	}
-	metricsSum := 0.0
+	metricsSum := metricSumZero
 	for _, result := range metrics.MetricDataResults {
 		if len(result.Values) != 0 {
 			for k, value := range result.Values {
