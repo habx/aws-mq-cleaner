@@ -46,15 +46,6 @@ type Queue struct {
 	URL  string
 	Name string
 }
-type DeadLetterQueue struct {
-	MainQueue       Queue
-	DeadLetterQueue []Queue
-}
-
-type QueuesToClean struct {
-	Queue           *Queue
-	DeadLetterQueue *DeadLetterQueue
-}
 
 type AWSClients struct {
 	CloudWatch *cloudwatch.CloudWatch
@@ -128,75 +119,48 @@ func awsSQSToClean() map[string]string {
 	waitGrp := &sync.WaitGroup{}
 	waitGrp.Add(len(listQueues.QueueUrls))
 	limiter := make(chan bool, maxProcessingWorkers)
-	sqsToCleanChannel := make([]chan *QueuesToClean, len(listQueues.QueueUrls))
+	sqsToCleanChannel := make([]chan *Queue, len(listQueues.QueueUrls))
 
 	for i, queueURL := range listQueues.QueueUrls {
-		sqsToCleanChannel[i] = make(chan *QueuesToClean, 1)
+		sqsToCleanChannel[i] = make(chan *Queue, 1)
 		go processing(limiter, sqsToCleanChannel[i], waitGrp, awsClient, queueURL)
 	}
 	waitGrp.Wait()
-	var queuesToCleanToMerge []QueuesToClean
+	sqsToClean := make(map[string]string)
 	for i := 0; i < len(listQueues.QueueUrls); i++ {
 		queuesToClean := <-sqsToCleanChannel[i]
 		if queuesToClean != nil {
-			queuesToCleanToMerge = append(queuesToCleanToMerge, *queuesToClean)
-		}
-	}
-
-	sqsToClean := make(map[string]string)
-	// add queues to clean
-	for _, queuesToClean := range queuesToCleanToMerge {
-		if queuesToClean.Queue != nil {
-			sqsToClean[queuesToClean.Queue.URL] = queuesToClean.Queue.Name
-		}
-	}
-	// add Dead Letter Queues to clean
-
-	for _, queuesToClean := range queuesToCleanToMerge {
-		if queuesToClean.DeadLetterQueue != nil {
-			lenQueues := len(queuesToClean.DeadLetterQueue.DeadLetterQueue)
-			lenQueuesMatched := 0
-			for _, queue := range queuesToClean.DeadLetterQueue.DeadLetterQueue {
-				if _, ok := sqsToClean[queue.URL]; ok {
-					lenQueuesMatched++
-				}
-			}
-			if lenQueuesMatched == lenQueues {
-				sqsToClean[queuesToClean.DeadLetterQueue.MainQueue.URL] = queuesToClean.DeadLetterQueue.MainQueue.Name
-			} else {
-				delete(sqsToClean, queuesToClean.DeadLetterQueue.MainQueue.URL)
-			}
-
+			sqsToClean[queuesToClean.URL] = queuesToClean.Name
 		}
 	}
 	return sqsToClean
 }
 
-func processing(limiter chan bool, sqsToClean chan *QueuesToClean, group *sync.WaitGroup, awsClients *AWSClients, queueURL *string) {
+func processing(limiter chan bool, sqsToClean chan *Queue, group *sync.WaitGroup, awsClients *AWSClients, queueURL *string) {
 	now := time.Now()
 	queueName := *sqsQueueURLToQueueName(queueURL)
-	tLog := log.With("queueName", queueName)
-	tLog.Debugw("start processing", "queueName", queueName)
+	qLog := log.With("queueName", queueName)
+	qLog.Debugw("start processing", "queueName", queueName)
 
-	queuesToClean := &QueuesToClean{}
+	queuesToClean := &Queue{}
 	limiter <- true
 	// define the func to be executed at the end of the processing
 	defer func() {
 		<-limiter
 		sqsToClean <- queuesToClean
 		group.Done()
-		tLog.Debugw("stop processing", "queueName", queueName)
+		qLog.Debugw("stop processing", "queueName", queueName)
 	}()
 
 	if queueURL != nil {
 		if rootArgs.excludePatten != nil {
 			if rootArgs.excludePatten.MatchString(queueName) {
-				tLog.Debugw("Skipping queue due to exclude pattern ")
+				qLog.Debugw("Skipping queue due to exclude pattern ")
 				return
 			}
 		}
 		if CheckTagNameUpdateDate != "" {
-			tLog.Debug("Updating SNS usage date tag")
+			qLog.Debug("Updating SNS usage date tag")
 			skip, err := updateDateToDelete(queueURL)
 			if err != nil {
 				log.Warnw("Cannot check tag name date update", "err", err)
@@ -209,41 +173,30 @@ func processing(limiter chan bool, sqsToClean chan *QueuesToClean, group *sync.W
 		// Retrieve metrics from Cloud Watch
 		metricsSum, err := awsClients.GetCloudWatchMetrics(&now, queueURL)
 		if err != nil {
-			tLog.Warnw("cannot get metrics", "err", err)
+			qLog.Warnw("cannot get metrics", "err", err)
 			return
 		}
-
-		// Evaluate if is dead letter queue and get associated queue
-		isDeadLetterQueue, associatedQueue, err := awsClients.IsDeadLetterQueue(queueURL)
-		if err != nil {
-			tLog.Warnw("cannot get dead letter queue source Queues", "err", err)
-		}
-
-		tLog = tLog.With("metricsSum", metricsSum)
-		if isDeadLetterQueue {
-			var _associatedQueue []Queue
-			for _, s := range associatedQueue {
-				_associatedQueue = append(_associatedQueue, Queue{
-					Name: *sqsQueueURLToQueueName(&s),
-					URL:  s,
-				})
+		if *metricsSum == metricSumZero {
+			// Evaluate if is dead letter queue and get associated queue
+			isDeadLetterQueue, associatedQueue, err := awsClients.IsDeadLetterQueue(queueURL)
+			if err != nil {
+				qLog.Warnw("cannot get dead letter queue source Queues", "err", err)
 			}
-			queuesToClean.DeadLetterQueue = &DeadLetterQueue{
-				MainQueue: Queue{
-					URL:  *queueURL,
-					Name: queueName,
-				},
-				DeadLetterQueue: _associatedQueue,
+			qLog = qLog.With("metricsSum", metricsSum)
+			if isDeadLetterQueue {
+				qLog.Debugw("Queue is a dead letter queue", "sourceQueue", associatedQueue)
 			}
+			qLog.Debugw("adding metrics sum", "value", float64(len(associatedQueue)))
+			*metricsSum += float64(len(associatedQueue))
 		}
 		if *metricsSum == metricSumZero {
-			tLog.Debugw("Queue is unused", "queueName", queueName)
-			queuesToClean.Queue = &Queue{
+			qLog.Debugw("Queue is unused", "queueName", queueName)
+			queuesToClean = &Queue{
 				URL:  *queueURL,
 				Name: queueName,
 			}
 		} else {
-			tLog.Debug("Queue is used")
+			qLog.Debug("Queue is used")
 		}
 	}
 }
@@ -267,7 +220,7 @@ func (c *AWSClients) IsDeadLetterQueue(queueURL *string) (bool, []string, error)
 }
 
 func (c *AWSClients) GetCloudWatchMetrics(now *time.Time, queueURL *string) (*float64, error) {
-	tLog := log.With("queueURL", queueURL)
+	qLog := log.With("queueURL", queueURL)
 	metrics, err := c.CloudWatch.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, now, queueURL))
 	if err != nil {
 		return nil, fmt.Errorf("cannot get metrics: %w", err)
@@ -285,7 +238,7 @@ func (c *AWSClients) GetCloudWatchMetrics(now *time.Time, queueURL *string) (*fl
 				metricsSum += *value
 			}
 		} else {
-			tLog.Debugw("No metric value", "metricLabel", *result.Label)
+			qLog.Debugw("No metric value", "metricLabel", *result.Label)
 		}
 	}
 	return &metricsSum, nil
