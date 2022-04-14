@@ -151,6 +151,7 @@ func awsSQSToClean() map[string]string {
 		}
 	}
 	// add Dead Letter Queues to clean
+
 	for _, queuesToClean := range queuesToCleanToMerge {
 		if queuesToClean.DeadLetterQueue != nil {
 			lenQueues := len(queuesToClean.DeadLetterQueue.DeadLetterQueue)
@@ -161,8 +162,11 @@ func awsSQSToClean() map[string]string {
 				}
 			}
 			if lenQueuesMatched == lenQueues {
-				sqsToClean[queuesToClean.Queue.URL] = queuesToClean.Queue.Name
+				sqsToClean[queuesToClean.DeadLetterQueue.MainQueue.URL] = queuesToClean.DeadLetterQueue.MainQueue.Name
+			} else {
+				delete(sqsToClean, queuesToClean.DeadLetterQueue.MainQueue.URL)
 			}
+
 		}
 	}
 	return sqsToClean
