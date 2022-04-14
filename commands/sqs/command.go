@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	metricSumZero             = 0
+	metricSumZero             = 0.0
 	maxCloudWatchMaxDatapoint = 100
 	maxProcessingWorkers      = 5
 )
@@ -37,14 +37,28 @@ var (
 		PreRun:  validation,
 		Run:     printResult,
 	}
-	log      *zap.SugaredLogger
-	rootArgs rootArguments
-	sqsSvc   *sqs.SQS
+	log       *zap.SugaredLogger
+	rootArgs  rootArguments
+	awsClient *AWSClients
 )
 
-type QueuesToDelete struct {
-	Queues map[string]string
-	Dlq    map[string][]string
+type Queue struct {
+	URL  string
+	Name string
+}
+type DeadLetterQueue struct {
+	MainQueue       Queue
+	DeadLetterQueue []Queue
+}
+
+type QueuesToClean struct {
+	Queue           *Queue
+	DeadLetterQueue *DeadLetterQueue
+}
+
+type AWSClients struct {
+	CloudWatch *cloudwatch.CloudWatch
+	SQS        *sqs.SQS
 }
 
 func init() {
@@ -56,8 +70,9 @@ func init() {
 }
 
 func printResult(_ *cobra.Command, _ []string) {
+	awsClient = NewAWSClients()
+	queuesAfterDelete := make(map[string][]string)
 	queues := awsSQSToClean()
-
 	table := tablewriter.NewWriter(os.Stdout)
 
 	if rootArgs.enableDelete {
@@ -65,12 +80,15 @@ func printResult(_ *cobra.Command, _ []string) {
 			table.ClearRows()
 			table.SetHeader([]string{"Queue", "Message"})
 		}
-		queues = awsSQSDelete(queues)
+		queuesAfterDelete = awsClient.AwsSQSDelete(queues)
 	} else if !rootArgs.noHeader {
 		table.SetHeader([]string{"Queue"})
+		for k, v := range queues {
+			queuesAfterDelete[k] = []string{v}
+		}
 	}
 
-	for _, v := range queues {
+	for _, v := range queuesAfterDelete {
 		table.Append(v)
 	}
 	table.SetAutoWrapText(false)
@@ -87,71 +105,81 @@ func printResult(_ *cobra.Command, _ []string) {
 	table.Render()
 }
 
-func awsSQSToClean() map[string][]string {
+func NewAWSClients() *AWSClients {
 	log.Debug("Initializing SQS session")
-	sqsSvc = sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
+	sqsSvc := sqs.New(helpers.GetAwsSession(AwsSqsEndpoint))
 
 	log.Debug("Initializing Cloudwatch session")
 	cwSvc := cloudwatch.New(helpers.GetAwsSession(AwsCloudWatchEndpoint))
+	return &AWSClients{
+		CloudWatch: cwSvc,
+		SQS:        sqsSvc,
+	}
+}
 
+func awsSQSToClean() map[string]string {
 	log.Debug("Listing queues")
-	listQueues, err := sqsSvc.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
+	listQueues, err := awsClient.SQS.ListQueues(&sqs.ListQueuesInput{QueueNamePrefix: aws.String(AwsSQSQueuePrefix)})
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Debugw("Queues fetched", "queuesNb", len(listQueues.QueueUrls))
-	sqsToClean := make(map[string][]string)
 
 	waitGrp := &sync.WaitGroup{}
 	waitGrp.Add(len(listQueues.QueueUrls))
 	limiter := make(chan bool, maxProcessingWorkers)
-	sqsToCleanChannel := make([]chan QueuesToDelete, len(listQueues.QueueUrls))
+	sqsToCleanChannel := make([]chan *QueuesToClean, len(listQueues.QueueUrls))
 
 	for i, queueURL := range listQueues.QueueUrls {
-		sqsToCleanChannel[i] = make(chan QueuesToDelete, 1)
-		go processing(limiter, sqsToCleanChannel[i], waitGrp, cwSvc, sqsSvc, queueURL)
+		sqsToCleanChannel[i] = make(chan *QueuesToClean, 1)
+		go processing(limiter, sqsToCleanChannel[i], waitGrp, awsClient, queueURL)
 	}
 	waitGrp.Wait()
-	var queuesToCleanToMerge []QueuesToDelete
+	var queuesToCleanToMerge []QueuesToClean
 	for i := 0; i < len(listQueues.QueueUrls); i++ {
 		queuesToClean := <-sqsToCleanChannel[i]
-		queuesToCleanToMerge = append(queuesToCleanToMerge, queuesToClean)
-	}
-	queuesToCleanToMerged := QueuesToDelete{
-		Queues: make(map[string]string),
-		Dlq:    make(map[string][]string),
-	}
-	for _, queues := range queuesToCleanToMerge {
-		for k, v := range queues.Dlq {
-			queuesToCleanToMerged.Dlq[k] = v
-		}
-		for k, v := range queues.Queues {
-			queuesToCleanToMerged.Queues[k] = v
+		if queuesToClean != nil {
+			queuesToCleanToMerge = append(queuesToCleanToMerge, *queuesToClean)
 		}
 	}
-	for url, queueName := range queuesToCleanToMerged.Queues {
-		sqsToClean[url] = append(sqsToClean[url], queueName)
-		for _, dlq := range queuesToCleanToMerged.Dlq[url] {
-			sqsToClean[dlq] = append(sqsToClean[dlq], *sqsQueueURLToQueueName(&dlq))
+
+	sqsToClean := make(map[string]string)
+	// add queues to clean
+	for _, queuesToClean := range queuesToCleanToMerge {
+		if queuesToClean.Queue != nil {
+			sqsToClean[queuesToClean.Queue.URL] = queuesToClean.Queue.Name
+		}
+	}
+	// add Dead Letter Queues to clean
+	for _, queuesToClean := range queuesToCleanToMerge {
+		if queuesToClean.DeadLetterQueue != nil {
+			lenQueues := len(queuesToClean.DeadLetterQueue.DeadLetterQueue)
+			lenQueuesMatched := 0
+			for _, queue := range queuesToClean.DeadLetterQueue.DeadLetterQueue {
+				if _, ok := sqsToClean[queue.URL]; ok {
+					lenQueuesMatched++
+				}
+			}
+			if lenQueuesMatched == lenQueues {
+				sqsToClean[queuesToClean.Queue.URL] = queuesToClean.Queue.Name
+			}
 		}
 	}
 	return sqsToClean
 }
 
-func processing(limiter chan bool, sqsToClean chan QueuesToDelete, group *sync.WaitGroup, cwSvc *cloudwatch.CloudWatch, sqsSvc *sqs.SQS, queueURL *string) {
+func processing(limiter chan bool, sqsToClean chan *QueuesToClean, group *sync.WaitGroup, awsClients *AWSClients, queueURL *string) {
 	now := time.Now()
 	queueName := *sqsQueueURLToQueueName(queueURL)
 	tLog := log.With("queueName", queueName)
 	tLog.Debugw("start processing", "queueName", queueName)
-	_sqsToClean := make(map[string]string)
-	_sqsDlqToClean := make(map[string][]string)
+
+	queuesToClean := &QueuesToClean{}
 	limiter <- true
+	// define the func to be executed at the end of the processing
 	defer func() {
 		<-limiter
-		sqsToClean <- QueuesToDelete{
-			Queues: _sqsToClean,
-			Dlq:    _sqsDlqToClean,
-		}
+		sqsToClean <- queuesToClean
 		group.Done()
 		tLog.Debugw("stop processing", "queueName", queueName)
 	}()
@@ -174,55 +202,89 @@ func processing(limiter chan bool, sqsToClean chan QueuesToDelete, group *sync.W
 				return
 			}
 		}
-		metrics, err := cwSvc.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, &now, queueURL))
+		// Retrieve metrics from Cloud Watch
+		metricsSum, err := awsClients.GetCloudWatchMetrics(&now, queueURL)
 		if err != nil {
-			log.Fatal(err)
+			tLog.Warnw("cannot get metrics", "err", err)
+			return
 		}
-		metricsSum := 0.0
-		failed := false
-		for _, result := range metrics.MetricDataResults {
-			if len(result.Values) != 0 {
-				for k, value := range result.Values {
-					tLog.Debugw(
-						"Metric fetched",
-						"metricLabel", *result.Label,
-						"metricValue", *value,
-						"metricDate", *result.Timestamps[k],
-					)
-					metricsSum += *value
-				}
-			} else {
-				tLog.Debugw("No metric value", "metricLabel", *result.Label)
-				failed = true
+
+		// Evaluate if is dead letter queue and get associated queue
+		isDeadLetterQueue, associatedQueue, err := awsClients.IsDeadLetterQueue(queueURL)
+		if err != nil {
+			tLog.Warnw("cannot get dead letter queue source Queues", "err", err)
+		}
+
+		tLog = tLog.With("metricsSum", metricsSum)
+		if isDeadLetterQueue {
+			var _associatedQueue []Queue
+			for _, s := range associatedQueue {
+				_associatedQueue = append(_associatedQueue, Queue{
+					Name: *sqsQueueURLToQueueName(&s),
+					URL:  s,
+				})
+			}
+			queuesToClean.DeadLetterQueue = &DeadLetterQueue{
+				MainQueue: Queue{
+					URL:  *queueURL,
+					Name: queueName,
+				},
+				DeadLetterQueue: _associatedQueue,
 			}
 		}
-		isDld := false
-		dql, err := sqsSvc.ListDeadLetterSourceQueues(&sqs.ListDeadLetterSourceQueuesInput{QueueUrl: queueURL})
-		if err != nil {
-			tLog.Warnw("cannot determine if is dql", "queueName", queueName, "err", err)
-		} else {
-			if len(dql.QueueUrls) != 0 {
-				tLog.Debugw("is dead letter queue candidate", "queueName", queueName, "dlq", dql.QueueUrls)
-				isDld = true
-				for _, dlq := range dql.QueueUrls {
-					_sqsDlqToClean[*dlq] = append(_sqsDlqToClean[*dlq], *queueURL)
-				}
-			} else {
-				tLog.Debugw("is dead letter queue without queue", "queueName", queueName, "dlq", dql.QueueUrls)
-			}
-		}
-		if !failed && !isDld {
-			tLog = tLog.With("metricsSum", metricsSum)
-			if metricsSum == metricSumZero {
-				tLog.Debugw("Queue is unused", "queueName", queueName)
-				_sqsToClean[*queueURL] = queueName
-			} else {
-				tLog.Debug("Queue is used")
+		if *metricsSum == metricSumZero {
+			tLog.Debugw("Queue is unused", "queueName", queueName)
+			queuesToClean.Queue = &Queue{
+				URL:  *queueURL,
+				Name: queueName,
 			}
 		} else {
-			tLog.Debug("Invalid metrics")
+			tLog.Debug("Queue is used")
 		}
 	}
+}
+
+func (c *AWSClients) IsDeadLetterQueue(queueURL *string) (bool, []string, error) {
+	isDeadLetterQueue := false
+	var associatedQueuesForDeadLetterQueue []string
+	associatedQueues, err := c.SQS.ListDeadLetterSourceQueues(&sqs.ListDeadLetterSourceQueuesInput{QueueUrl: queueURL})
+	if err != nil {
+		return false, associatedQueuesForDeadLetterQueue, fmt.Errorf("cannot get dead letter queue source Queues: %w", err)
+	}
+	if len(associatedQueues.QueueUrls) != 0 {
+		isDeadLetterQueue = true
+	}
+	for _, associatedQueue := range associatedQueues.QueueUrls {
+		if associatedQueue != nil {
+			associatedQueuesForDeadLetterQueue = append(associatedQueuesForDeadLetterQueue, *associatedQueue)
+		}
+	}
+	return isDeadLetterQueue, associatedQueuesForDeadLetterQueue, nil
+}
+
+func (c *AWSClients) GetCloudWatchMetrics(now *time.Time, queueURL *string) (*float64, error) {
+	tLog := log.With("queueURL", queueURL)
+	metrics, err := c.CloudWatch.GetMetricData(GetSQSMetricDataInput(rootArgs.UnusedSinceDate, now, queueURL))
+	if err != nil {
+		return nil, fmt.Errorf("cannot get metrics: %w", err)
+	}
+	metricsSum := 0.0
+	for _, result := range metrics.MetricDataResults {
+		if len(result.Values) != 0 {
+			for k, value := range result.Values {
+				log.Debugw(
+					"Metric fetched",
+					"metricLabel", *result.Label,
+					"metricValue", *value,
+					"metricDate", *result.Timestamps[k],
+				)
+				metricsSum += *value
+			}
+		} else {
+			tLog.Debugw("No metric value", "metricLabel", *result.Label)
+		}
+	}
+	return &metricsSum, nil
 }
 
 type rootArguments struct {
@@ -326,7 +388,7 @@ func sqsQueueURLToQueueName(queueURL *string) *string {
 
 // return true if the topic should be skipped.
 func updateDateToDelete(queueURL *string) (bool, error) {
-	queueTags, err := sqsSvc.ListQueueTags(&sqs.ListQueueTagsInput{QueueUrl: queueURL})
+	queueTags, err := awsClient.SQS.ListQueueTags(&sqs.ListQueueTagsInput{QueueUrl: queueURL})
 	if err != nil {
 		return false, fmt.Errorf("cannot list queue tags '%s': %w", *queueURL, err)
 	}
@@ -350,11 +412,11 @@ func updateDateToDelete(queueURL *string) (bool, error) {
 	return false, nil
 }
 
-func awsSQSDelete(queues map[string][]string) map[string][]string {
+func (c *AWSClients) AwsSQSDelete(queues map[string]string) map[string][]string {
 	sqsToDelete := make(map[string][]string)
 	for queue := range queues {
-		log.Debugw("Deleting queue ", "queuName", queue)
-		_, err := sqsSvc.DeleteQueue(&sqs.DeleteQueueInput{QueueUrl: &queue})
+		log.Debugw("Deleting queue ", "queueName", queue)
+		_, err := awsClient.SQS.DeleteQueue(&sqs.DeleteQueueInput{QueueUrl: &queue})
 		sqsToDelete[queue] = []string{*sqsQueueURLToQueueName(&queue), func(err error) string {
 			if err != nil {
 				return err.Error()
