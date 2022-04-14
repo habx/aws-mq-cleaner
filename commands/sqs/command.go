@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	metricSumZero             = 0
 	maxCloudWatchMaxDatapoint = 100
 	maxProcessingWorkers      = 5
 )
@@ -119,26 +118,26 @@ func awsSQSToClean() map[string][]string {
 func processing(limiter chan bool, sqsToClean chan map[string][]string, group *sync.WaitGroup, cwSvc *cloudwatch.CloudWatch, queueURL *string) {
 	now := time.Now()
 	queueName := *sqsQueueURLToQueueName(queueURL)
-	tLog := log.With("queueName", queueName)
-	tLog.Debugw("start processing", "queueName", queueName)
+	qLog := log.With("queueName", queueName)
+	qLog.Debugw("start processing", "queueName", queueName)
 	_sqsToClean := make(map[string][]string)
 	limiter <- true
 	defer func() {
 		<-limiter
 		sqsToClean <- _sqsToClean
 		group.Done()
-		tLog.Debugw("stop processing", "queueName", queueName)
+		qLog.Debugw("stop processing", "queueName", queueName)
 	}()
 
 	if queueURL != nil {
 		if rootArgs.excludePatten != nil {
 			if rootArgs.excludePatten.MatchString(queueName) {
-				tLog.Debugw("Skipping queue due to exclude pattern ")
+				qLog.Debugw("Skipping queue due to exclude pattern ")
 				return
 			}
 		}
 		if CheckTagNameUpdateDate != "" {
-			tLog.Debug("Updating SNS usage date tag")
+			qLog.Debug("Updating SNS usage date tag")
 			skip, err := updateDateToDelete(queueURL)
 			if err != nil {
 				log.Warnw("Cannot check tag name date update", "err", err)
@@ -153,11 +152,10 @@ func processing(limiter chan bool, sqsToClean chan map[string][]string, group *s
 			log.Fatal(err)
 		}
 		metricsSum := 0.0
-		failed := false
 		for _, result := range metrics.MetricDataResults {
 			if len(result.Values) != 0 {
 				for k, value := range result.Values {
-					tLog.Debugw(
+					qLog.Debugw(
 						"Metric fetched",
 						"metricLabel", *result.Label,
 						"metricValue", *value,
@@ -165,21 +163,28 @@ func processing(limiter chan bool, sqsToClean chan map[string][]string, group *s
 					)
 					metricsSum += *value
 				}
-			} else {
-				tLog.Debugw("No metric value", "metricLabel", *result.Label)
-				failed = true
 			}
 		}
-		if !failed {
-			tLog = tLog.With("metricsSum", metricsSum)
-			if metricsSum == metricSumZero {
-				tLog.Debug("Queue is unused")
-				_sqsToClean[*queueURL] = []string{queueName}
-			} else {
-				tLog.Debug("Queue is used")
+
+		// If we don't have any metric we shall just see if it's a queue
+		if metricsSum == 0 {
+			resp, err := sqsSvc.ListDeadLetterSourceQueues(&sqs.ListDeadLetterSourceQueuesInput{QueueUrl: queueURL})
+			if err != nil {
+				qLog.Warnw("Cannot list dead letter source queues", "err", err)
+				return
 			}
+			metricsSum += float64(len(resp.QueueUrls))
+			if metricsSum > 0 {
+				qLog.Debugw("Queue is a dead letter queue", "sourceQueue", resp.QueueUrls[0])
+			}
+		}
+
+		qLog = qLog.With("metricsSum", metricsSum)
+		if metricsSum == 0 {
+			qLog.Debug("Queue is unused")
+			_sqsToClean[*queueURL] = []string{queueName}
 		} else {
-			tLog.Debug("Invalid metrics")
+			qLog.Debug("Queue is used")
 		}
 	}
 }
