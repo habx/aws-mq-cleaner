@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	metricSumZero             = 0.0
 	maxCloudWatchMaxDatapoint = 100
 	maxProcessingWorkers      = 5
 )
@@ -176,7 +175,7 @@ func processing(limiter chan bool, sqsToClean chan *Queue, group *sync.WaitGroup
 			qLog.Warnw("cannot get metrics", "err", err)
 			return
 		}
-		if *metricsSum == metricSumZero {
+		if *metricsSum == 0.0 {
 			// Evaluate if is dead letter queue and get associated queue
 			isDeadLetterQueue, associatedQueue, err := awsClients.IsDeadLetterQueue(queueURL)
 			if err != nil {
@@ -189,7 +188,7 @@ func processing(limiter chan bool, sqsToClean chan *Queue, group *sync.WaitGroup
 			qLog.Debugw("adding metrics sum", "value", float64(len(associatedQueue)))
 			*metricsSum += float64(len(associatedQueue))
 		}
-		if *metricsSum == metricSumZero {
+		if *metricsSum == 0.0 {
 			qLog.Debugw("Queue is unused", "queueName", queueName)
 			queuesToClean = &Queue{
 				URL:  *queueURL,
@@ -225,7 +224,7 @@ func (c *AWSClients) GetCloudWatchMetrics(now *time.Time, queueURL *string) (*fl
 	if err != nil {
 		return nil, fmt.Errorf("cannot get metrics: %w", err)
 	}
-	metricsSum := metricSumZero
+	metricsSum := 0.0
 	for _, result := range metrics.MetricDataResults {
 		if len(result.Values) != 0 {
 			for k, value := range result.Values {
