@@ -64,6 +64,7 @@ workflows:
       - docker/publish:
           deploy: false
           <<: *docker-config
+          tag: dev
           filters:
             <<: *filters_only_dev
           requires:
