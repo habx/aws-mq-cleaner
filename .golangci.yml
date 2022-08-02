@@ -53,6 +53,8 @@ linters:
     - paralleltest
     - cyclop
     - nestif
+    - exhaustruct
+    - nosnakecase
 
   fast: false
 
