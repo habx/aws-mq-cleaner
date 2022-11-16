@@ -64,7 +64,8 @@ func Test_SNS(t *testing.T) {
 		Convey("sns: topic prefix with test value", func() {
 			args := []string{"--loglevel=debug", "sns", "--sns-endpoint=" + snsLocalStack, "--topic-prefix=test"}
 			commands.RootCommand.SetArgs(args)
-			commands.RootCommand.Execute()
+			err := commands.RootCommand.Execute()
+			So(err, ShouldBeNil)
 		})
 
 		Convey("sns: enable delete and header", func() {

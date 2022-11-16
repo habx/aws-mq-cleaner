@@ -9,5 +9,8 @@ var version string
 
 func main() {
 	flags.Version = version
-	commands.RootCommand.Execute()
+	err := commands.RootCommand.Execute()
+	if err != nil {
+		panic(err)
+	}
 }
