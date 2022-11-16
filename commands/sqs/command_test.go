@@ -184,33 +184,3 @@ func CreateMetrics(endpoint string, queueURL *string) {
 		panic(err)
 	}
 }
-
-//func CreateInvalidMetrics(endpoint string, queueURL *string) {
-//	cwSvc := cloudwatch.New(helpers.GetAwsSession(endpoint))
-//	aws.String("2021-01-24T00:00:00.000-03:00")
-//	now := time.Now().UTC()
-//	x := here.GetSQSMetricDataInput(
-//		&now,
-//		&now,
-//		queueURL,
-//	)
-//
-//	var metricsList []*cloudwatch.MetricDatum
-//	for _, query := range x.MetricDataQueries {
-//		new := cloudwatch.MetricDatum{
-//			Dimensions:        query.MetricStat.Metric.Dimensions,
-//			MetricName:        query.MetricStat.Metric.MetricName,
-//			Timestamp:         &now,
-//			Unit:              aws.String("Count"),
-//			Value:             nil,
-//		}
-//		metricsList = append(metricsList, &new)
-//	}
-//	_, err := cwSvc.PutMetricData(&cloudwatch.PutMetricDataInput{
-//		MetricData: metricsList,
-//		Namespace:  aws.String("AWS/SQS"),
-//	})
-//	if err != nil {
-//		panic(err)
-//	}
-//}
