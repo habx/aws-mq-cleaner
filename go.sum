@@ -16,6 +16,8 @@ github.com/aws/aws-sdk-go v1.44.152 h1:L9aaepO8wHB67gwuGD8VgIYH/cmQDxieCt7FeLa0+
 github.com/aws/aws-sdk-go v1.44.152/go.mod h1:aVsgQcEevwlmQ7qHE9I3h+dtQgpqhFB+i8Phjh7fkwI=
 github.com/aws/aws-sdk-go v1.44.153 h1:KfN5URb9O/Fk48xHrAinrPV2DzPcLa0cd9yo1ax5KGg=
 github.com/aws/aws-sdk-go v1.44.153/go.mod h1:aVsgQcEevwlmQ7qHE9I3h+dtQgpqhFB+i8Phjh7fkwI=
+github.com/aws/aws-sdk-go v1.44.156 h1:3RhbBTZ87HoI5OP2JjcKdd5qOnyo9YOAW8+Bb/h0vSE=
+github.com/aws/aws-sdk-go v1.44.156/go.mod h1:aVsgQcEevwlmQ7qHE9I3h+dtQgpqhFB+i8Phjh7fkwI=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/cpuguy83/go-md2man/v2 v2.0.2 h1:p1EgwI/C7NhT0JmVkwCD2ZBK8j4aeHQX2pMHHBfMQ6w=
 github.com/cpuguy83/go-md2man/v2 v2.0.2/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
